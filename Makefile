@@ -1,6 +1,5 @@
 # shgittp v0.4.1 Makefile
-PREFIX ?= /usr/local
-BIN_DIR = $(PREFIX)/bin
+BIN_DIR = $(HOME)/.bin
 CONF_DIR = $(HOME)/.config/shgittp
 
 .PHONY: install uninstall test
