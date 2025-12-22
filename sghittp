@@ -1,0 +1,309 @@
+#!/usr/bin/env bash
+# shgittp - Portable Dotfiles Bootstrapper
+# Version: 0.4.1
+# License: MIT
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+# --- Configuration Loading ---
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp"
+CONFIG_FILE="$CONFIG_DIR/config"
+[ -f "./shgittp.conf" ] && CONFIG_FILE="./shgittp.conf"
+
+# Defaults
+REPO_URL=""
+BRANCH="main"
+DOTFILES_DIR=".cfg"
+BACKUP_DIR_PREFIX=".cfg-backup"
+SSH_AGENT_FWD=0
+DRY_RUN=0
+POST_RUN=""
+
+# Static Git Mirrors
+STATIC_GIT_X86_64="https://github.com/nocer/static-git-bin/raw/master/bin/git-x86_64"
+STATIC_GIT_AARCH64="https://github.com/YZITE/static-git-bin/raw/main/bin/git-aarch64"
+
+# Load config
+if [ -f "$CONFIG_FILE" ]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+fi
+
+# --- Input Sanitization & Validation ---
+
+# 1. Trim Whitespace from critical variables
+trim() { local var="$1"; var="${var#"${var%%[![:space:]]*}"}"; var="${var%"${var##*[![:space:]]}"}"; echo -n "$var"; }
+
+REPO_URL=$(trim "$REPO_URL")
+STATIC_GIT_X86_64=$(trim "$STATIC_GIT_X86_64")
+STATIC_GIT_AARCH64=$(trim "$STATIC_GIT_AARCH64")
+
+# 2. Validate REPO_URL
+if [[ -n "$REPO_URL" ]]; then
+    case "$REPO_URL" in
+        git@*:*|https://*|http://*) ;;
+        *) 
+            printf "\033[1;31m[error]\033[0m Invalid REPO_URL format: %s\n" "$REPO_URL"
+            printf "Must start with 'git@...' (SSH) or 'http(s)://' (HTTPS)\n"
+            exit 1 
+            ;;
+    esac
+fi
+
+# --- Helpers ---
+log() { printf "\033[1;32m[shgittp]\033[0m %s\n" "$*"; }
+err() { printf "\033[1;31m[error]\033[0m %s\n" "$*"; exit 1; }
+
+usage() {
+    cat <<EOF
+shgittp v0.4.1
+Usage: shgittp [options] [user@]hostname [ssh-options...]
+
+Options:
+  -r, --repo URL      Git repository URL (Required)
+  -b, --branch NAME   Git branch to checkout (default: $BRANCH)
+  -A, --agent         Enable SSH agent forwarding (Required for git@... URLs)
+  -x, --run COMMAND   Run command from remote \$HOME after checkout (e.g., 'bash .setup.sh')
+  -d, --dry-run       Preview actions without making changes
+  -h, --help          Show this help
+
+Examples:
+  # Public repo
+  shgittp -r https://github.com/me/dots.git user@host
+
+  # Private repo + Post-install script
+  shgittp -A -r git@github.com:me/dots.git -x "bash .config/install.sh" user@host
+EOF
+    exit 1
+}
+
+shell_quote() {
+    local input="$1"
+    local escaped="${input//\'/\'\\\'\'}"
+    printf "'%s'" "$escaped"
+}
+
+# --- Argument Parsing ---
+SSH_TARGET=""
+declare -a SSH_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -r|--repo) REPO_URL="$2"; shift 2 ;;
+        -b|--branch) BRANCH="$2"; shift 2 ;;
+        -A|--agent) SSH_AGENT_FWD=1; shift ;;
+        -x|--run) POST_RUN="$2"; shift 2 ;;
+        -d|--dry-run) DRY_RUN=1; shift ;;
+        -h|--help) usage ;;
+        --) shift; SSH_ARGS+=("$@"); break ;;
+        -*) SSH_ARGS+=("$1"); shift ;;
+        *)
+            if [[ -z "$SSH_TARGET" ]]; then
+                SSH_TARGET="$1"
+            else
+                SSH_ARGS+=("$1")
+            fi
+            shift
+            ;;
+    esac
+done
+
+[[ -z "$SSH_TARGET" ]] && usage
+[[ -z "$REPO_URL" ]] && err "REPO_URL is not set."
+
+# --- Payload Generation ---
+generate_payload() {
+    local q_repo=$(shell_quote "$REPO_URL")
+    local q_branch=$(shell_quote "$BRANCH")
+    local q_dir=$(shell_quote "$DOTFILES_DIR")
+    local q_backup=$(shell_quote "$BACKUP_DIR_PREFIX")
+    local q_url_x86=$(shell_quote "$STATIC_GIT_X86_64")
+    local q_url_arm=$(shell_quote "$STATIC_GIT_AARCH64")
+    local q_agent=$(shell_quote "$SSH_AGENT_FWD")
+    local q_post=$(shell_quote "$POST_RUN")
+    local q_dry=$(shell_quote "$DRY_RUN")
+
+    cat <<REMOTE_PAYLOAD
+#!/bin/sh
+set -u
+export LC_ALL=C
+
+# Config
+REPO_URL=$q_repo
+BRANCH=$q_branch
+DOTFILES_DIR=$q_dir
+BACKUP_PREFIX=$q_backup
+URL_X86=$q_url_x86
+URL_ARM=$q_url_arm
+USE_AGENT=$q_agent
+POST_RUN=$q_post
+DRY_RUN=$q_dry
+
+# Runtime
+GIT_DIR="\$HOME/\$DOTFILES_DIR"
+WORK_TREE="\$HOME"
+BIN_DIR="\$HOME/.local/bin"
+
+rlog() { echo "  [remote] \$*"; }
+rerr() { echo "  [remote-error] \$*" >&2; } # Don't exit here, let caller handle
+
+# Simulation wrapper
+run_cmd() {
+    if [ "\$DRY_RUN" -eq 1 ]; then
+        echo "  [dry-run] \$*"
+        return 0
+    fi
+    "\$@"
+}
+
+ensure_git() {
+    # If Dry Run, pretend we found it to allow subsequent checks to pass
+    if [ "\$DRY_RUN" -eq 1 ]; then
+        rlog "Checking for git (Dry Run: Assuming success)"
+        GIT_EXEC="git"
+        return 0
+    fi
+
+    if command -v git >/dev/null 2>&1; then
+        rlog "System git found: \$(command -v git)"
+        GIT_EXEC="git"
+        return 0
+    fi
+
+    # Try Package Manager (Root)
+    if [ "\$(id -u)" -eq 0 ]; then
+        if command -v apk >/dev/null; then apk add --no-cache git >/dev/null && GIT_EXEC="git" && return 0; fi
+        if command -v apt-get >/dev/null; then apt-get update >/dev/null && apt-get install -y git >/dev/null && GIT_EXEC="git" && return 0; fi
+    fi
+
+    # Static Fallback
+    rlog "Preparing static git in \$BIN_DIR..."
+    mkdir -p "\$BIN_DIR"
+    export PATH="\$BIN_DIR:\$PATH"
+    
+    if [ -x "\$BIN_DIR/git" ]; then
+        GIT_EXEC="\$BIN_DIR/git"
+        return 0
+    fi
+
+    ARCH=\$(uname -m)
+    case "\$ARCH" in
+        x86_64) DL_URL="\$URL_X86" ;;
+        aarch64) DL_URL="\$URL_ARM" ;;
+        *) rerr "Unsupported architecture: \$ARCH"; return 1 ;;
+    esac
+
+    rlog "Downloading static git..."
+    if command -v curl >/dev/null; then
+        curl -fsSL "\$DL_URL" -o "\$BIN_DIR/git"
+    elif command -v wget >/dev/null; then
+        wget -qO "\$BIN_DIR/git" "\$DL_URL"
+    else
+        rerr "Need curl or wget."; return 1
+    fi
+
+    chmod +x "\$BIN_DIR/git"
+    GIT_EXEC="\$BIN_DIR/git"
+    return 0
+}
+
+setup_repo() {
+    if [ "\$USE_AGENT" -eq 1 ]; then
+        export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    else
+        unset GIT_SSH_COMMAND
+    fi
+    
+    git_c() { "\$GIT_EXEC" --git-dir="\$GIT_DIR" --work-tree="\$WORK_TREE" "\$@"; }
+
+    # Init
+    if [ -d "\$GIT_DIR" ]; then
+        rlog "Repo exists."
+        [ "\$DRY_RUN" -eq 0 ] && git_c fetch origin
+    else
+        rlog "Cloning \$REPO_URL..."
+        run_cmd "\$GIT_EXEC" clone --bare "\$REPO_URL" "\$GIT_DIR"
+    fi
+
+    [ "\$DRY_RUN" -eq 1 ] && return 0
+
+    git_c config --local status.showUntrackedFiles no
+
+    # Checkout Strategy
+    rlog "Attempting checkout..."
+    
+    if git_c checkout "\$BRANCH" 2>/dev/null; then
+        rlog "Checkout successful."
+    else
+        rlog "Conflicts detected. Backing up existing files..."
+        BACKUP_DIR="\$HOME/\$BACKUP_PREFIX-\$(date +%Y%m%d-%H%M%S)-\$\$"
+        mkdir -p "\$BACKUP_DIR"
+
+        # ROBUST CONFLICT HANDLING (Null-terminated)
+        # We iterate over all files in the repo. If they exist locally, we move them.
+        # This handles spaces, newlines, and special characters perfectly.
+        
+        git_c ls-tree -r -z --name-only "\$BRANCH" | while IFS= read -r -d '' file; do
+             if [ -e "\$WORK_TREE/\$file" ]; then
+                 target_dir="\$BACKUP_DIR/\$(dirname "\$file")"
+                 mkdir -p "\$target_dir"
+                 mv "\$WORK_TREE/\$file" "\$target_dir/"
+             fi
+        done
+        
+        rlog "Files backed up to: \$BACKUP_DIR"
+        rlog "Retrying checkout..."
+        git_c checkout "\$BRANCH" || { rerr "Checkout failed."; return 1; }
+    fi
+    return 0
+}
+
+finalize() {
+    ALIAS_CMD="alias config='/usr/bin/env git --git-dir=\$GIT_DIR --work-tree=\$WORK_TREE'"
+    
+    if [ -n "\$POST_RUN" ]; then
+        rlog "Executing post-run: \$POST_RUN"
+        if [ "\$DRY_RUN" -eq 0 ]; then
+             # Use bash -c to preserve complex quoting in the user command
+             (cd "\$WORK_TREE" && bash -c "\$POST_RUN") || { rerr "Post-run command failed."; return 1; }
+        fi
+    fi
+
+    echo ""
+    rlog "=== Installation Complete ==="
+    rlog "1. Run this to use your dotfiles now:"
+    echo "     \$ALIAS_CMD"
+    rlog "2. Add that alias to your ~/.bashrc or ~/.zshrc."
+    return 0
+}
+
+# Main Execution Flow (Fail fast)
+ensure_git || exit 1
+setup_repo || exit 1
+finalize || exit 1
+REMOTE_PAYLOAD
+}
+
+# --- Execution ---
+CMD_ARRAY=("ssh")
+[[ "$SSH_AGENT_FWD" -eq 1 ]] && CMD_ARRAY+=("-A")
+CMD_ARRAY+=("${SSH_ARGS[@]}")
+CMD_ARRAY+=("$SSH_TARGET")
+
+log "Connecting to $SSH_TARGET..."
+
+if generate_payload | "${CMD_ARRAY[@]}" '
+    TMP=$(mktemp 2>/dev/null || echo "/tmp/shgittp-$$.sh")
+    cat > "$TMP"
+    chmod +x "$TMP"
+    "$TMP"
+    RET=$?
+    rm -f "$TMP"
+    exit $RET
+'; then
+    exit 0
+else
+    err "Remote failed."
+fi
