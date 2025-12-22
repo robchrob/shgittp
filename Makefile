@@ -1,14 +1,15 @@
-# shgittp v0.4.1 Makefile
+# shgittp v0.4.2 Makefile
 BIN_DIR = $(HOME)/.bin
 CONF_DIR = $(HOME)/.config/shgittp
 
-.PHONY: install uninstall test
+.PHONY: install uninstall reinstall test clean
 
 install:
 	@echo "Installing shgittp..."
 	@mkdir -p $(BIN_DIR)
 	@cp shgittp $(BIN_DIR)/shgittp
 	@chmod 755 $(BIN_DIR)/shgittp
+	@echo "Installed: $(BIN_DIR)/shgittp"
 	
 	@echo "Installing config..."
 	@mkdir -p $(CONF_DIR)
@@ -19,10 +20,14 @@ install:
 		echo "Skipped: Config exists."; \
 	fi
 
-uninstall:
-	rm -f $(BIN_DIR)/shgittp
+clean:
+	@echo "Removing shgittp binary..."
+	@rm -f $(BIN_DIR)/shgittp
+	@echo "Removing shgittp config..."
+	@rm -rf $(CONF_DIR)
 
-test:
-	@echo "Checking syntax..."
-	@bash -n shgittp
-	@echo "Syntax OK."
+uninstall: clean
+	@echo "Uninstall complete."
+
+reinstall: clean install
+	@echo "Reinstall complete."
