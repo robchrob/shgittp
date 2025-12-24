@@ -1,3 +1,8 @@
+v0.4.11
+    - Smaller code
+    - Faster git / --clone-full for full history
+    - 
+
 v0.4.10
     - Code overhaul
     - Customizable work-tree (defaults to $HOME), -w, or --work-dir
