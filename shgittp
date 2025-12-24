@@ -1,30 +1,31 @@
 #!/usr/bin/env bash
-
 # shgittp - Portable Dotfiles Bootstrapper
-# Version: 0.4.11
+# Version: 0.4.12
 # License: MIT
 
 set -euo pipefail
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
 DEF_BRANCH=develop; DEF_DIR=.dot; DEF_BAK=.dot-backup; DEF_TREE=""
 
-usage() { cat <<'EOF'; exit; }
-shgittp v0.4.11
-Usage: shgittp [options] [user@]host [ssh-opts...]
+usage() {
+  cat <<EOF
+shgittp v0.4.12
+Usage: shgittp [options] [user@]host
 Options:
-  -r, --repo URL      Git repository URL
+  -r, --repo URL      Git URL
   -b, --branch NAME   Git branch (default: develop)
-  -w, --work-tree DIR Target directory (default: $HOME)
+  -w, --work-tree DIR Target directory (default: \$HOME)
   -x, --run COMMAND   Post-run command
-  -A, --agent         Enable SSH agent forwarding
-  -i, --interactive   Stay in interactive shell after installation
-  -d, --dry-run       Show payload without executing
-  --clone-full        Disable shallow clone optimization
-  -v, --version       Show version
-  -h, --help          Show this help
+  -A, --agent         Forward SSH agent
+  -i, --interactive   Interactive shell after run
+  -d, --dry-run       Dry run
+  --clone-full        Full clone (no shallow)
+  -v, --version       Version
+  -h, --help          Help
 EOF
+  exit 0
+}
 
-log() { echo "== $*"; }
 err() { echo "!! $*" >&2; exit 1; }
 
 CLI_REPO=""; CLI_BRANCH=""; CLI_TREE=""; CLI_RUN=""
@@ -32,16 +33,16 @@ AGENT=0; INTERACTIVE=0; DRY=0; CLONE_FULL=0; TARGET=""; SSH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case $1 in
-    -r|--repo) CLI_REPO=$2; shift ;;
-    -b|--branch) CLI_BRANCH=$2; shift ;;
+    -r|--repo)      CLI_REPO=$2; shift ;;
+    -b|--branch)    CLI_BRANCH=$2; shift ;;
     -w|--work-tree) CLI_TREE=$2; shift ;;
-    -x|--run) CLI_RUN=$2; shift ;;
-    -A|--agent) AGENT=1 ;;
+    -x|--run)       CLI_RUN=$2; shift ;;
+    -A|--agent)     AGENT=1 ;;
     -i|--interactive) INTERACTIVE=1 ;;
-    -d|--dry-run) DRY=1 ;;
-    --clone-full) CLONE_FULL=1 ;;
-    -v|--version) echo "shgittp v0.4.11"; exit ;;
-    -h|--help) usage ;;
+    -d|--dry-run)   DRY=1 ;;
+    --clone-full)   CLONE_FULL=1 ;;
+    -v|--version)   echo "shgittp v0.4.12"; exit 0 ;;
+    -h|--help)      usage ;;
     --) shift; SSH_ARGS+=("$@"); break ;;
     -*) SSH_ARGS+=("$1") ;;
     *) [[ -z $TARGET ]] && TARGET=$1 || SSH_ARGS+=("$1") ;;
@@ -50,171 +51,143 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $TARGET ]] || usage
-
 HOST=${TARGET##*@}
-declare -A CFG=()
 
-[[ -f $CONFIG ]] && {
-  SECT="global"
-  while read -r L; do
+declare -A CFG SEEN
+KEYS="REPO_URL|BRANCH|DOTFILES_DIR|BACKUP_DIR_PREFIX|TARGET_WORK_TREE|USER"
+
+if [[ -f $CONFIG ]]; then
+  SECT="default"
+  while IFS= read -r L || [[ -n $L ]]; do
     [[ $L =~ ^[[:space:]]*(#|$) ]] && continue
     [[ $L =~ ^\[(.+)\] ]] && { SECT=${BASH_REMATCH[1]}; continue; }
-    [[ $SECT == global || $SECT == $HOST || $SECT == $TARGET ]] || continue
+    [[ $SECT =~ ^(global|$HOST|$TARGET|default)$ ]] || continue
 
-    [[ $L =~ ^(REPO_URL|BRANCH|DOTFILES_DIR|BACKUP_DIR_PREFIX|TARGET_WORK_TREE|USER)(_([^=]+))?=\"?([^\"]*) ]] || continue
-
-    K=${BASH_REMATCH[1]}; S=${BASH_REMATCH[3]:-default}; V=${BASH_REMATCH[4]}
-    case $K in
-      REPO_URL) CFG[$S,URL]=$V ;;
-      BRANCH)   CFG[$S,BRANCH]=$V ;;
-      DOTFILES_DIR) CFG[$S,DIR]=$V ;;
-      BACKUP_DIR_PREFIX) CFG[$S,BACKUP]=$V ;;
-      TARGET_WORK_TREE) CFG[$S,TREE]=$V ;;
-      USER) CFG[$S,USER]=$V ;;
-    esac
+    if [[ $L =~ ^[[:space:]]*($KEYS)(_([^=]+))?=\"?([^\"]*)\"? ]]; then
+      K=${BASH_REMATCH[1]}; S=${BASH_REMATCH[3]:-default}; V=${BASH_REMATCH[4]}
+      case $K in
+        REPO_URL)          K=URL; SEEN[$S]=1 ;;
+        DOTFILES_DIR)      K=DIR ;;
+        BACKUP_DIR_PREFIX) K=BACKUP ;;
+        TARGET_WORK_TREE)  K=TREE ;;
+      esac
+      CFG["$S,$K"]=$V
+    fi
   done < "$CONFIG"
-}
+fi
 
-CFG[default,URL]=${CLI_REPO:-${CFG[default,URL]:-}}
-CFG[default,BRANCH]=${CLI_BRANCH:-${CFG[default,BRANCH]:-$DEF_BRANCH}}
-CFG[default,TREE]=${CLI_TREE:-${CFG[default,TREE]:-$DEF_TREE}}
+if [[ $CLI_REPO ]]; then
+  CFG["default,URL"]=$CLI_REPO
+  SEEN[default]=1
+fi
 
-SETS=($(printf '%s\n' "${!CFG[@]}" | grep ',URL$' | cut -d, -f1 | sort -u))
+IFS=$'\n' SETS=($(sort -u <<<"${!SEEN[@]}")); unset IFS
+(( ${#SETS[@]} )) || { [[ ${CFG["default,URL"]:-} ]] && SETS=(default); } || err "No repositories configured."
 
-(( ${#SETS[@]} )) || err "No repositories configured"
 for S in "${SETS[@]}"; do
-  U=${CFG[$S,URL]}
-  [[ $U ]] || err "Set '$S' missing URL"
-  [[ $U == git@*:*/* && $AGENT -eq 0 ]] && err "SSH URL requires -A"
+  [[ ${CFG["$S,URL"]:-} ]] || err "Set '$S' missing URL."
+  [[ ${CFG["$S,URL"]} == git@* && $AGENT -eq 0 ]] && err "Set '$S' requires SSH agent (-A)."
 done
 
 if ((DRY)); then
   for S in "${SETS[@]}"; do
-    AUTH=${CFG[$S,USER]:-}
-    STATUS=process
-    [[ $AUTH && $TARGET == *@* && $AUTH != ${TARGET%%@*} ]] && STATUS="skip (user)"
-    echo "[$S] ${CFG[$S,URL]:-<none>} -> $STATUS"
+    U=${CFG["$S,USER"]:-}
+    [[ $U && $TARGET == *@* && $U != ${TARGET%%@*} ]] && STS="skip (user)" || STS="process"
+    echo "[$S] ${CFG["$S,URL"]} -> $STS"
   done
   exit 0
 fi
 
-declare -A USERS=()
-for S in "${SETS[@]}"; do
-  U=${CFG[$S,USER]:-} && [[ $U ]] && USERS[$U]=1
-done
-
+declare -A USERS
+for S in "${SETS[@]}"; do [[ ${CFG["$S,USER"]:-} ]] && USERS[${CFG["$S,USER"]}]=1; done
 TARGETS=()
-if [[ $TARGET == *@* ]]; then
-  TARGETS+=("$TARGET")
-elif (( ${#USERS[@]} )); then
-  SORTED_USERS=($(echo "${!USERS[@]}" | tr ' ' '\n' | sort))
-  for U in "${SORTED_USERS[@]}"; do TARGETS+=("$U@$TARGET"); done
-else
-  TARGETS+=("$TARGET")
-fi
+if [[ $TARGET == *@* ]]; then TARGETS+=("$TARGET")
+elif (( ${#USERS[@]} )); then for U in "${!USERS[@]}"; do TARGETS+=("$U@$TARGET"); done
+else TARGETS+=("$TARGET"); fi
 
-payload() {
-  local USER=$1
+emit_lib() {
   cat <<SH
-#!/bin/sh
-set -eu
-export AGENT=$AGENT POST_RUN=$(printf '%q' "${CLI_RUN:-}") INTERACTIVE=$INTERACTIVE
-export TARGET_WORK_TREE=$(printf '%q' "${CFG[default,TREE]:-$DEF_TREE}")
-export CLONE_FULL=$CLONE_FULL
-
-# Disable host key checking and suppress warnings for automation
-export GIT_SSH_COMMAND="ssh -F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
-
-command -v git >/dev/null || { echo "error: git not found" >&2; exit 1; }
-
 run() {
-  local SUF=\$1 URL=\$2 BR=\$3 DIR=\$4 BACK=\$5 TREE=\$6
-  local GITDIR=\$HOME/\$DIR; TREE=\${TREE:-\$HOME}
+  local S="\$1" U="\$2" B="\$3" D="\$4" K="\$5" T="\${6:-\$HOME}"
+  local G="\$HOME/\$D"
+  mkdir -p "\$T" || exit 1
+  g() { command git --git-dir="\$G" --work-tree="\$T" "\$@"; }
 
-  mkdir -p "\$TREE" 2>/dev/null || { echo "error: cannot create \$TREE" >&2; exit 1; }
-
-  git() { command git --git-dir="\$GITDIR" --work-tree="\$TREE" "\$@"; }
-
-  if [ -d "\$GITDIR" ]; then
-    printf "[\$SUF] updating & checkout... "
-    git fetch -q origin 2>/dev/null || { echo "failed" >&2; exit 1; }
+  if [ -d "\$G" ]; then
+    printf "[\$S] update... "
+    g fetch -q origin || exit 1
   else
-    printf "[\$SUF] cloning & checkout... "
-    if [ "\$CLONE_FULL" = "1" ]; then
-      command git clone --bare -q "\$URL" "\$GITDIR" 2>/dev/null || { echo "failed" >&2; exit 1; }
-    else
-      # Optimized shallow clone: faster, smaller
-      command git clone --bare --depth 1 --single-branch --branch "\$BR" -q "\$URL" "\$GITDIR" 2>/dev/null || {
-        echo "failed" >&2; exit 1;
-      }
-    fi
+    printf "[\$S] clone... "
+    local DP="--depth 1"
+    [ "\$CLONE_FULL" = 1 ] && DP=""
+    command git clone --bare \$DP -q -b "\$B" "\$U" "\$G" || exit 1
   fi
 
-  git config status.showUntrackedFiles no
-
-  if git checkout -q "\$BR" 2>/dev/null; then
-    echo "ok"
+  g config status.showUntrackedFiles no
+  if g checkout -q "\$B" 2>/dev/null; then echo "ok"
   else
     echo "conflict"
-    printf "[\$SUF] backing up conflicting files... "
-    BAK=\$HOME/\${BACK}-\${BR}-\$(date +%Y%m%d-%H%M%S)
-    mkdir -p "\$BAK"
-    git ls-tree -rz --name-only "\$BR" 2>/dev/null | xargs -0 -I{} sh -c '
-      [ -f "'"\$TREE"'/{}" ] || exit 0
-      mkdir -p "'"\$BAK"'/\$(dirname "{}")" 2>/dev/null
-      mv "'"\$TREE"'/{}" "'"\$BAK"'/{}" 2>/dev/null || true
-    '
-    git checkout -fq "\$BR" 2>/dev/null || { echo "failed" >&2; exit 1; }
-    echo "ok (saved to \$BAK)"
+    printf "[\$S] backup... "
+    local BK="\$HOME/\$K-\$B-\$(date +%Y%m%d%H%M%S)"
+    mkdir -p "\$BK"
+    g ls-tree -rz --name-only "\$B" | xargs -0 -I{} sh -c '
+      [ -e "'"\$T"'/{}" ] || exit 0
+      mkdir -p "'"\$BK"'/\$(dirname "{}")"
+      mv "'"\$T"'/{}" "'"\$BK"'/{}"'
+    g checkout -fq "\$B" || exit 1
+    echo "ok -> \$BK"
   fi
-
-  ALIAS=\${SUF,,}
-  [ "\$SUF" = default ] && ALIAS=cfg || ALIAS=cfg-\$ALIAS
-  echo "[\$SUF] alias \$ALIAS='git --git-dir=\$GITDIR --work-tree=\$TREE'"
+  local ALIAS=\$(echo "\$S" | tr '[:upper:]' '[:lower:]')
+  [ "\$S" = default ] && ALIAS=cfg || ALIAS=cfg-\$ALIAS
+  echo "[\$S] alias \$ALIAS='git --git-dir=\$G --work-tree=\$T'"
 }
-SH
-
-  # Output connection header with first repo's directory
-  FIRST_DIR=""
-  for S in "${SETS[@]}"; do
-    AUTH=${CFG[$S,USER]:-}
-    [[ $AUTH && $AUTH != $USER ]] && continue
-    FIRST_DIR=${CFG[$S,DIR]:-$DEF_DIR}
-    break
-  done
-
-  echo "echo \"== Connected to \$(whoami)@\$(hostname) (dir \\\$HOME/$FIRST_DIR)\""
-
-  for S in "${SETS[@]}"; do
-    AUTH=${CFG[$S,USER]:-}
-    [[ $AUTH && $AUTH != $USER ]] && continue
-
-    printf "run %q %q %q %q %q %q\n" \
-      "$S" \
-      "${CFG[$S,URL]}" \
-      "${CFG[$S,BRANCH]:-${CFG[default,BRANCH]}}" \
-      "${CFG[$S,DIR]:-$DEF_DIR}" \
-      "${CFG[$S,BACKUP]:-$DEF_BAK}" \
-      "${CFG[$S,TREE]:-$DEF_TREE}"
-  done
-
-  cat <<'SH'
-
-[ -n "$POST_RUN" ] && {
-  printf "post-run: %s... " "$POST_RUN"
-  (cd "$TARGET_WORK_TREE" && bash -c "$POST_RUN") 2>/dev/null || { echo "failed" >&2; exit 1; }
-  echo "ok"
-}
-
-echo "==> complete"
-[ "$INTERACTIVE" = 1 ] && exec bash -l
-exit 0
 SH
 }
 
 SSH=(ssh); ((AGENT)) && SSH+=(-A); SSH+=("${SSH_ARGS[@]}")
+pids=()
 
 for T in "${TARGETS[@]}"; do
-  USER=${T%%@*}; [[ $USER == $T ]] && USER=""
-  payload "$USER" | "${SSH[@]}" "$T" bash -s || err "$T failed"
+  TU=${T%%@*}; [[ $TU == $T ]] && TU=""
+  L_TREE=${CFG["default,TREE"]:-$DEF_TREE}
+  {
+    cat <<HDR
+#!/bin/bash
+set -eu
+export AGENT=$AGENT
+export CLONE_FULL=$CLONE_FULL
+export POST_RUN=$(printf '%q' "$CLI_RUN")
+export TARGET_WORK_TREE=$(printf '%q' "$L_TREE")
+export GIT_SSH_COMMAND='ssh -F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'
+command -v git >/dev/null || { echo "git missing" >&2; exit 1; }
+HDR
+    emit_lib
+    echo "echo \"== Connected to \$(whoami)@\$(hostname)\""
+
+    for S in "${SETS[@]}"; do
+      SU=${CFG["$S,USER"]:-}
+      [[ $SU && $TU && $SU != $TU ]] && continue
+      printf 'run %q %q %q %q %q %q\n' "$S" "${CFG["$S,URL"]}" \
+        "${CFG["$S,BRANCH"]:-${CFG["default,BRANCH"]:-$DEF_BRANCH}}" \
+        "${CFG["$S,DIR"]:-$DEF_DIR}" "${CFG["$S,BACKUP"]:-$DEF_BAK}" \
+        "${CFG["$S,TREE"]:-${CFG["default,TREE"]:-$DEF_TREE}}"
+    done
+
+    echo "echo ==> complete"
+    cat <<'FTR'
+[ -n "$POST_RUN" ] && {
+  printf "post-run: %s... " "$POST_RUN"
+  (cd "${TARGET_WORK_TREE:-$HOME}" && bash -c "$POST_RUN") || exit 1
+  echo "ok"
+}
+FTR
+    if [[ $INTERACTIVE == 1 ]]; then
+      echo "exec bash -l"
+    else
+      echo "exit 0"
+    fi
+  } | "${SSH[@]}" "$T" bash -s & pids+=($!)
 done
+
+RET=0; for p in "${pids[@]}"; do wait "$p" || RET=1; done
+exit $RET
