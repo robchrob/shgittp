@@ -1,46 +1,28 @@
-#/usr/bin/env bash
+#!/usr/bin/env bash
 
 # shgittp - Portable Dotfiles Bootstrapper
-# Version: 0.4.8
+# Version: 0.4.10
 # License: MIT
 
 set -o errexit
 set -o nounset
 set -o pipefail
 
-# Configuration
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp"
 CONFIG_FILE="$CONFIG_DIR/config"
 
-# Defaults
-REPO_URL=""
-BRANCH="develop"
-DOTFILES_DIR=".dot"
-BACKUP_DIR_PREFIX=".dot-backup"
-TARGET_WORK_TREE=""
-SSH_AGENT_FWD=0
-POST_RUN=""
-INTERACTIVE=0
-DRY_RUN=0
-
-# Load config if present
-[ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
-
-# Utils
-log() { printf "\033[1;32m[shgittp]\033[0m %s\n" "$*"; }
-err() { printf "\033[1;31m[error]\033[0m %s\n" "$*" >&2; exit 1; }
-
+# --- 1. Argument Parsing ---
 usage() {
     cat <<EOF
-shgittp v0.4.8
+shgittp v0.4.10
 Usage: shgittp [options] [user@]hostname [ssh-options...]
 
 Options:
-  -r, --repo URL      Git repository URL (Required)
-  -b, --branch NAME   Git branch to checkout (default: $BRANCH)
+  -r, --repo URL      Git repository URL
+  -b, --branch NAME   Git branch to checkout (default: develop)
   -w, --work-tree DIR Target directory for files (default: \$HOME)
-  -A, --agent         Enable SSH agent forwarding (Required for git@... URLs)
-  -x, --run COMMAND   Run remote cmd in Work Tree after checkout (requires bash)
+  -A, --agent         Enable SSH agent forwarding
+  -x, --run COMMAND   Run remote cmd in Work Tree after checkout
   -i, --interactive   Stay in interactive shell after installation
   -d, --dry-run       Show payload without executing
   -v, --version       Show version
@@ -49,209 +31,265 @@ EOF
     exit 0
 }
 
-version() {
-    echo "shgittp v0.4.8"
-    exit 0
-}
-
+version() { echo "shgittp v0.4.10"; exit 0; }
 shell_quote() { printf '%q' "$1"; }
+log() { printf "\033[1;32m[shgittp]\033[0m %s\n" "$*"; }
+err() { printf "\033[1;31m[error]\033[0m %s\n" "$*" >&2; exit 1; }
 
-# Input sanitization
-trim() {
-    local var="$1"
-    var="${var#"${var%%[![:space:]]*}"}"
-    var="${var%"${var##*[![:space:]]}"}"
-    printf "%s" "$var"
-}
-
-validate_repo_url() {
-    local url="$1"
-    [[ -z "$url" ]] && err "REPO_URL is not set."
-
-    case "$url" in
-        git@*:*/*) ;;  # SSH: git@github.com:user/repo
-        https://*/*|http://*/*) ;;  # HTTPS: https://github.com/user/repo
-        *)
-            err "Invalid REPO_URL format: $url\nMust be 'git@host:user/repo' (SSH) or 'https://host/user/repo' (HTTPS)"
-            ;;
-    esac
-}
-
-# Argparse
-SSH_TARGET=""
+# CLI Defaults
+CLI_REPO=""
+CLI_BRANCH=""
+CLI_TREE=""
+CLI_RUN=""
+SSH_AGENT_FWD=0
+INTERACTIVE=0
+DRY_RUN=0
+CLI_TARGET=""
 declare -a SSH_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -r|--repo) REPO_URL=$(trim "$2"); shift 2 ;;
-        -b|--branch) BRANCH="$2"; shift 2 ;;
-        -w|--work-tree) TARGET_WORK_TREE="$2"; shift 2 ;;
-        -A|--agent) SSH_AGENT_FWD=1; shift ;;
-        -x|--run) POST_RUN="$2"; shift 2 ;;
-        -i|--interactive) INTERACTIVE=1; shift ;;
-        -d|--dry-run) DRY_RUN=1; shift ;;
+        -r|--repo) CLI_REPO=$(shell_quote "$2"); shift ;;
+        -b|--branch) CLI_BRANCH="$2"; shift ;;
+        -w|--work-tree) CLI_TREE="$2"; shift ;;
+        -x|--run) CLI_RUN="$2"; shift ;;
+        -A|--agent) SSH_AGENT_FWD=1 ;;
+        -i|--interactive) INTERACTIVE=1 ;;
+        -d|--dry-run) DRY_RUN=1 ;;
         -v|--version) version ;;
         -h|--help) usage ;;
         --) shift; SSH_ARGS+=("$@"); break ;;
-        -*) SSH_ARGS+=("$1"); shift ;;
-        *)
-            if [[ -z "$SSH_TARGET" ]]; then
-                SSH_TARGET="$1"
-            else
-                SSH_ARGS+=("$1")
-            fi
-            shift
-            ;;
+        -*) SSH_ARGS+=("$1") ;;
+        *) [[ -z "$CLI_TARGET" ]] && CLI_TARGET="$1" || SSH_ARGS+=("$1") ;;
     esac
+    shift
 done
 
-[[ -z "$SSH_TARGET" ]] && usage
-validate_repo_url "$REPO_URL"
+[[ -z "$CLI_TARGET" ]] && usage
 
-[[ "$REPO_URL" =~ ^git@ && "$SSH_AGENT_FWD" -ne 1 ]] && \
-    err "SSH URLs require -A flag for agent forwarding.\nHTTPS URLs are unsupported without manual token setup."
+# --- 2. Configuration Loading ---
+BRANCH="develop"
+DOTFILES_DIR=".dot"
+BACKUP_DIR_PREFIX=".dot-backup"
+TARGET_WORK_TREE=""
 
+declare -A CFG_REPOS=() CFG_BRANCHES=() CFG_DIRS=() CFG_BACKUPS=() CFG_TREES=() CFG_USERS=()
+
+# Extract basic host for config lookup (remove user@ if present)
+HOST="${CLI_TARGET##*@}"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+    SECT=""
+    while IFS= read -r L; do
+        [[ "$L" =~ ^[[:space:]]*(#|$) ]] && continue
+        [[ "$L" =~ ^\[([^\]]+)\] ]] && { SECT="${BASH_REMATCH[1]}"; continue; }
+        
+        # Filter sections by hostname
+        [[ -z "$SECT" || "$SECT" == "$HOST" || "$SECT" == "$CLI_TARGET" ]] || continue
+
+        if [[ "$L" =~ ^(REPO_URL|BRANCH|DOTFILES_DIR|BACKUP_DIR_PREFIX|TARGET_WORK_TREE|USER)(_([A-Za-z0-9]+))?=\"?([^\"]*) ]]; then
+            K="${BASH_REMATCH[1]}"
+            S="${BASH_REMATCH[3]:-default}"
+            V="${BASH_REMATCH[4]}"
+
+            case "$K" in
+                REPO_URL) CFG_REPOS[$S]="$V" ;;
+                BRANCH) CFG_BRANCHES[$S]="$V" ;;
+                DOTFILES_DIR) CFG_DIRS[$S]="$V" ;;
+                BACKUP_DIR_PREFIX) CFG_BACKUPS[$S]="$V" ;;
+                TARGET_WORK_TREE) CFG_TREES[$S]="$V" ;;
+                USER) CFG_USERS[$S]="$V" ;;
+            esac
+        fi
+    done < "$CONFIG_FILE"
+fi
+
+# --- 3. Merge CLI & Determine Execution Queue ---
+[[ -n "$CLI_REPO" ]] && CFG_REPOS[default]="$CLI_REPO"
+[[ -n "$CLI_BRANCH" ]] && CFG_BRANCHES[default]="$CLI_BRANCH"
+[[ -n "$CLI_TREE" ]] && CFG_TREES[default]="$CLI_TREE"
+
+# Identify targets:
+# If CLI_TARGET is "user@host", we only run for that user.
+# If CLI_TARGET is "host", we scan config for ALL users defined for this host.
+declare -a RUN_QUEUE=()
+
+if [[ "$CLI_TARGET" == *?@*? ]]; then
+    # Explicit user provided in CLI, single run
+    RUN_QUEUE+=("$CLI_TARGET")
+    [[ -z "${CFG_USERS[default]:-}" ]] && CFG_USERS[default]="${CLI_TARGET%%@*}"
+else
+    # Bare hostname provided. Auto-detect all configured users.
+    # 1. Collect unique users from config (e.g. dev, root)
+    declare -A SEEN_USERS=()
+    for U in "${CFG_USERS[@]}"; do
+        [[ -n "$U" ]] && SEEN_USERS["$U"]=1
+    done
+    
+    # 2. Add them to queue (e.g. dev@endpoint, root@endpoint)
+    for U in "${!SEEN_USERS[@]}"; do
+        RUN_QUEUE+=("${U}@${CLI_TARGET}")
+    done
+    
+    # 3. If no users found in config, fallback to bare target (ssh default)
+    [[ ${#RUN_QUEUE[@]} -eq 0 ]] && RUN_QUEUE+=("$CLI_TARGET")
+fi
+
+# Validate
+[[ ${#CFG_REPOS[@]} -eq 0 ]] && err "No repositories configured."
+validate() {
+    local url="$1"
+    [[ -z "$url" ]] && err "REPO_URL is not set."
+    case "$url" in
+        git@*:*/*) [[ "$SSH_AGENT_FWD" -eq 1 ]] || err "SSH URLs require -A flag" ;;
+    esac
+}
+[[ -n "${CFG_REPOS[default]:-}" ]] && validate "${CFG_REPOS[default]}"
+
+
+# --- 4. Payload Generation ---
 generate_payload() {
-    local q_repo=$(shell_quote "$REPO_URL")
-    local q_branch=$(shell_quote "$BRANCH")
-    local q_dir=$(shell_quote "$DOTFILES_DIR")
-    local q_backup=$(shell_quote "$BACKUP_DIR_PREFIX")
-    local q_worktree=$(shell_quote "$TARGET_WORK_TREE")
-    local q_agent=$(shell_quote "$SSH_AGENT_FWD")
-    local q_post=$(shell_quote "$POST_RUN")
-
+    local CURRENT_USER="$1"
+    
     cat <<REMOTE_PAYLOAD
 #!/bin/sh
 set -eu
 export LC_ALL=C
 
-REPO_URL=$q_repo
-BRANCH=$q_branch
-DOTFILES_DIR=$q_dir
-BACKUP_PREFIX=$q_backup
-TARGET_WORK_TREE=$q_worktree
-USE_AGENT=$q_agent
-POST_RUN=$q_post
-
-# Define Locations
-GIT_DIR="\$HOME/\$DOTFILES_DIR"
-
-if [ -n "\$TARGET_WORK_TREE" ]; then
-    WORK_TREE="\$TARGET_WORK_TREE"
-else
-    WORK_TREE="\$HOME"
-fi
-
-# Ensure work tree exists (crucial if custom path)
-if [ ! -d "\$WORK_TREE" ]; then
-    mkdir -p "\$WORK_TREE" || { echo "Error: Could not create work tree at \$WORK_TREE"; exit 1; }
-fi
+POST_RUN=$(shell_quote "$CLI_RUN")
+USE_AGENT=$(shell_quote "$SSH_AGENT_FWD")
 
 rlog() { echo "  [remote] \$*"; }
 rerr() { echo "  [remote-error] \$*" >&2; exit 1; }
 
 ensure_git() {
-    if command -v git >/dev/null 2>&1; then
-        GIT_EXEC="git"
-        return 0
-    fi
-    rerr "Git is not installed on the remote system."
+    command -v git >/dev/null 2>&1 || rerr "Git is not installed"
+    GIT_EXEC="git"
 }
 
-setup_repo() {
-    if [ "\$USE_AGENT" -eq 1 ]; then
-        export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-    else
+setup_ssh() {
+    export GIT_SSH_COMMAND="ssh -F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+    if [ "\$USE_AGENT" -eq 0 ]; then
         unset GIT_SSH_COMMAND
     fi
+}
+
+process_repo() {
+    local SUF="\$1" USER="\$2" REPO_URL="\$3" BRANCH="\$4" DOTFILES_DIR="\$5" BACKUP_PREFIX="\$6" TARGET_WORK_TREE="\$7"
+    local GIT_DIR="\$HOME/\$DOTFILES_DIR"
+    local WORK_TREE="\${TARGET_WORK_TREE:-\$HOME}"
+
+    mkdir -p "\$WORK_TREE" 2>/dev/null || rerr "Cannot create work tree: \$WORK_TREE"
 
     git_c() { "\$GIT_EXEC" --git-dir="\$GIT_DIR" --work-tree="\$WORK_TREE" "\$@"; }
 
     if [ -d "\$GIT_DIR" ]; then
-        rlog "Repo exists at \$GIT_DIR - fetching updates..."
+        rlog "\$SUF: Fetching updates..."
         git_c fetch origin
     else
-        rlog "Cloning \$REPO_URL..."
-        # We clone bare, then we will use different work-tree
+        rlog "\$SUF: Cloning \$REPO_URL..."
         "\$GIT_EXEC" clone --bare "\$REPO_URL" "\$GIT_DIR"
     fi
 
     git_c config --local status.showUntrackedFiles no
-
-    rlog "Targeting Work Tree: \$WORK_TREE"
-    rlog "Attempting checkout of branch: \$BRANCH"
+    rlog "\$SUF: Checking out \$BRANCH..."
 
     if git_c checkout "\$BRANCH" 2>/dev/null; then
-        rlog "Checkout successful."
+        rlog "\$SUF: Success"
     else
-        rlog "Conflicts detected. Backing up existing files..."
-        BACKUP_DIR="\$HOME/\$BACKUP_PREFIX-\$BRANCH-\$(date +%Y%m%d-%H%M%S)-\$\$"
+        rlog "\$SUF: Conflicts detected, backing up..."
+        BACKUP_DIR="\$HOME/\${BACKUP_PREFIX}-\${BRANCH}-\$(date +%Y%m%d-%H%M%S)-\$\$"
         mkdir -p "\$BACKUP_DIR"
-
         git_c ls-tree -r -z --name-only "\$BRANCH" | while IFS= read -r -d '' file; do
-             if [ -e "\$WORK_TREE/\$file" ]; then
-                 target_dir="\$BACKUP_DIR/\$(dirname "\$file")"
-                 mkdir -p "\$target_dir"
-                 mv "\$WORK_TREE/\$file" "\$target_dir/"
-             fi
+            [ -e "\$WORK_TREE/\$file" ] || continue
+            target_dir="\$BACKUP_DIR/\$(dirname "\$file")"
+            mkdir -p "\$target_dir"
+            mv "\$WORK_TREE/\$file" "\$target_dir/"
         done
-
-        rlog "Files backed up to: \$BACKUP_DIR"
-        rlog "Retrying checkout (forced)..."
-        git_c checkout -f "\$BRANCH" || rerr "Checkout failed."
-    fi
-}
-
-finalize() {
-    rlog "=== Installation Complete ==="
-    rlog "1. Config files located in: \$WORK_TREE"
-    rlog "2. Manage with: alias cfg='git --git-dir=\$GIT_DIR --work-tree=\$WORK_TREE'"
-
-    if [ -n "\$POST_RUN" ]; then
-        rlog "Executing post-run: \$POST_RUN"
-        (cd "\$WORK_TREE" && bash -c "\$POST_RUN") || rerr "Post-run command failed."
+        git_c checkout -f "\$BRANCH" || rerr "\$SUF: Checkout failed"
     fi
 }
 
 ensure_git
-setup_repo
-finalize
+setup_ssh
+
+# Process sets relevant to CURRENT_USER
+$(for S in "${!CFG_REPOS[@]}"; do
+    R_USER="${CFG_USERS[$S]:-}"
+    # Strict User Filtering:
+    # If a repo set has a user defined, it MUST match the current SSH user.
+    if [[ -n "$R_USER" && -n "$CURRENT_USER" && "$CURRENT_USER" != "$R_USER" ]]; then
+        continue
+    fi
+
+    echo "process_repo $(shell_quote "$S") $(shell_quote "$R_USER") $(shell_quote "${CFG_REPOS[$S]}") $(shell_quote "${CFG_BRANCHES[$S]:-$BRANCH}") $(shell_quote "${CFG_DIRS[$S]:-$DOTFILES_DIR}") $(shell_quote "${CFG_BACKUPS[$S]:-$BACKUP_DIR_PREFIX}") $(shell_quote "${CFG_TREES[$S]:-$TARGET_WORK_TREE}")"
+done)
+
+# Summary
+rlog "=== Installation Complete ($CURRENT_USER) ==="
+$(for S in "${!CFG_REPOS[@]}"; do
+    R_USER="${CFG_USERS[$S]:-}"
+    if [[ -n "$R_USER" && -n "$CURRENT_USER" && "$CURRENT_USER" != "$R_USER" ]]; then
+        continue
+    fi
+
+    SLOWER="${S,,}"
+    ALIAS="cfg-${SLOWER}"
+    [[ "$S" == "default" ]] && ALIAS="cfg"
+    R_DIR="${CFG_DIRS[$S]:-$DOTFILES_DIR}"
+    R_TREE="${CFG_TREES[$S]:-$TARGET_WORK_TREE}"
+    [ -z "$R_TREE" ] && R_TREE="\$HOME"
+
+    echo "rlog \"alias $ALIAS='git --git-dir=\$HOME/$R_DIR --work-tree=$R_TREE'\""
+done)
+
+[ -n "\$POST_RUN" ] && {
+    rlog "Executing post-run: \$POST_RUN"
+    (cd "\${TARGET_WORK_TREE:-\$HOME}" && bash -c "\$POST_RUN") || rerr "Post-run command failed"
+}
+
+# Explicitly exit 0 to ensure the SSH session doesn't fail 
+# if the POST_RUN check above returns false.
+exit 0
 REMOTE_PAYLOAD
 }
 
-# --- Execution ---
+# --- 5. Execution Loop ---
 CMD_BASE=("ssh")
 [[ "$SSH_AGENT_FWD" -eq 1 ]] && CMD_BASE+=("-A")
 CMD_BASE+=("${SSH_ARGS[@]}")
 
-if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "=== DRY RUN MODE ==="
-    log "Would connect to: $SSH_TARGET"
-    log "Would use repo: $REPO_URL"
-    log "Would use work-tree: ${TARGET_WORK_TREE:-$HOME (default)}"
-    log "=== REMOTE PAYLOAD ==="
-    generate_payload
-    exit 0
-fi
+for TARGET in "${RUN_QUEUE[@]}"; do
+    # Extract user for filtering logic "dev@host" -> "dev"
+    CONN_USER="${TARGET%%@*}"
+    [[ "$CONN_USER" == "$TARGET" ]] && CONN_USER=""
 
-REMOTE_SCRIPT=$(mktemp -u "/tmp/shgittp-XXXXXX.sh")
-
-log "Connecting to $SSH_TARGET..."
-log "Uploading installation payload..."
-
-if ! generate_payload | "${CMD_BASE[@]}" "$SSH_TARGET" "cat > '$REMOTE_SCRIPT' && chmod +x '$REMOTE_SCRIPT'"; then
-    err "Failed to upload payload to remote host."
-fi
-
-CMD_EXEC=("${CMD_BASE[@]}")
-[[ "$INTERACTIVE" -eq 1 ]] && CMD_EXEC+=("-t")
-
-"${CMD_EXEC[@]}" "$SSH_TARGET" "
-    '$REMOTE_SCRIPT'
-    RET=\$?
-    rm -f '$REMOTE_SCRIPT'
-    if [ \"$INTERACTIVE\" = \"1\" ] && [ \$RET -eq 0 ]; then
-        exec bash -l
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log "=== DRY RUN ($TARGET) ==="
+        for S in "${!CFG_REPOS[@]}"; do
+            R_USER="${CFG_USERS[$S]:-}"
+            STATUS="Will process"
+            [[ -n "$R_USER" && -n "$CONN_USER" && "$CONN_USER" != "$R_USER" ]] && STATUS="SKIP (User mismatch)"
+            log "Repo [$S]: ${CFG_REPOS[$S]} -> $STATUS"
+        done
+        continue
     fi
-    exit \$RET
-"
+
+    REMOTE_SCRIPT=$(mktemp -u "/tmp/shgittp-XXXXXX.sh")
+    log "Connecting to $TARGET..."
+
+    if ! generate_payload "$CONN_USER" | "${CMD_BASE[@]}" "$TARGET" "cat > '$REMOTE_SCRIPT' && chmod +x '$REMOTE_SCRIPT'"; then
+        err "Failed to upload payload to $TARGET."
+    fi
+
+    CMD_EXEC=("${CMD_BASE[@]}")
+    [[ "$INTERACTIVE" -eq 1 ]] && CMD_EXEC+=("-t")
+
+    "${CMD_EXEC[@]}" "$TARGET" "
+        '$REMOTE_SCRIPT'
+        RET=\$?
+        rm -f '$REMOTE_SCRIPT'
+        [ \"$INTERACTIVE\" = \"1\" ] && [ \$RET -eq 0 ] && exec bash -l
+        exit \$RET
+    " || err "Session failed for $TARGET"
+done
