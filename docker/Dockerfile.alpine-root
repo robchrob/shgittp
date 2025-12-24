@@ -16,9 +16,10 @@ RUN adduser -D -s /bin/bash dev && \
 
 USER dev
 WORKDIR /home/dev
-RUN mkdir -p /home/dev/.local/bin /home/dev/.bin
+RUN mkdir -p /home/dev/.bin
 
 USER root
+RUN mkdir -p /root/.bin
 ARG SSH_PUB_KEY
 
 RUN if [ -n "$SSH_PUB_KEY" ]; then \

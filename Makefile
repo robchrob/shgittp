@@ -1,4 +1,4 @@
-# shgittp v0.4.10 Makefile
+# shgittp v0.4.11 Makefile
 BIN_DIR = $(HOME)/.bin
 CONF_DIR = $(HOME)/.config/shgittp
 
@@ -30,7 +30,7 @@ run:
 	@./docker/manage.sh alpine-basic restart && make reinstall && shgittp -A -i -r git@github.com:robchrob/dotfiles-bare.git -b minimal -x "bash .config/setup.sh" dev@devbox
 
 runroot:
-	@./docker/manage.sh alpine-root restart && make reinstall && shgittp -A endpoint
+	@./docker/manage.sh alpine-root restart && make reinstall && time shgittp -A endpoint
 
 uninstall: clean
 	@echo "Uninstall complete."
