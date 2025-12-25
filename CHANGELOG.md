@@ -6,6 +6,7 @@ v0.4.14
     - getoptions (??)
 
 v0.4.13 (TO RELEASE)
+    - code clear (less params, better logic) (no :: please)
     - be bash 3.0+ friendly & supports sh version at same time - inprogress
 
     - remove -A agent forward and do it by default

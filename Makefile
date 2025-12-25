@@ -1,4 +1,4 @@
-# shgittp v0.4.12 Makefile
+# shgittp v0.4.13 Makefile
 BIN_DIR = $(HOME)/.bin
 CONF_DIR = $(HOME)/.config/shgittp
 
