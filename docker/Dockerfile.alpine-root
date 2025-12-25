@@ -3,7 +3,7 @@
 FROM alpine:latest
 
 RUN apk add --no-cache \
-    openssh bash curl sudo less \
+    openssh bash curl sudo less ripgrep \
     git neovim
 
 RUN ssh-keygen -A && \
