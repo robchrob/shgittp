@@ -1,5 +1,9 @@
-v0.4.12
-    - 
+v0.4.13 (?)
+    - switch to sh compatibile (?)
+    - detect shell + show shell relevant script lines to append it to shell rc
+
+v0.4.12 (TO RELEASE)
+    - configure per repo post script
 
 v0.4.11
     - Smaller code
