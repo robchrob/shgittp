@@ -1,11 +1,13 @@
-v0.4.13 (?)
+v0.4.13 (TO RELEASE)
     - switch to sh compatibile (?)
     - detect shell + show shell relevant script lines to append it to shell rc (?)
-    - better output / flow / feel / ux
 
-v0.4.12 (TO RELEASE)
+v0.4.12
     - configure per repo post script
     - better configuration handling (overwrite/precedence)
+    - better configuration overally
+    - better output / flow / feel / ux
+    - improved usage string
 
 v0.4.11
     - Smaller code
