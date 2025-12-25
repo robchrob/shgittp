@@ -2,13 +2,11 @@
 # shgittp - Minimal SSH dotfiles bootstrap
 set -euo pipefail
 
-# SETUP
+# --- CONFIG & HELPERS ---
 VER="0.4.13"
-die()   { echo -e "\033[31m!! $*\033[0m" >&2; exit 1; }
-ver()   { echo "shgittp v$VER"; exit 0; }
+die() { echo -e "\033[31m!! $*\033[0m" >&2; exit 1; }
 usage() { echo -e "shgittp v$VER\n\t[-r URL] [-b BRANCH] [-w DIR] [-x CMD] [-id] [--full-clone] [user@]host"; exit 0; }
 
-# CONFIGURATION
 declare -A CFG SETS BATCHES
 declare -A MAP=( [REPO_URL]=URL [BRANCH]=BRANCH [DOTFILES_DIR]=DIR [BACKUP_DIR_PREFIX]=BACKUP [TARGET_WORK_TREE]=TREE [RUN_COMMAND]=RUN [USER]=USER )
 declare -A DEF=( [URL]="" [BRANCH]="main" [DIR]=".dotfiles" [BACKUP]=".dot-backup" [TREE]="" [RUN]="" [USER]="" )
@@ -16,16 +14,17 @@ declare -A DEF=( [URL]="" [BRANCH]="main" [DIR]=".dotfiles" [BACKUP]=".dot-backu
 CFG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
 ARGS=() TARGET="" INTERACTIVE=0 DRY=0 FULL=0
 
+# --- CLI PARSING ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -r|--repo)    CFG[cli:URL]="$2";   SETS[cli]=1; shift 2 ;;
-    -b|--branch)  CFG[cli:BRANCH]="$2"; shift 2 ;;
-    -w|--work)    CFG[cli:TREE]="$2";   shift 2 ;;
-    -x|--run)     CFG[cli:RUN]="$2";    shift 2 ;;
-    -i)           INTERACTIVE=1; shift ;;
+    -r|--repo)   CFG[cli:URL]="$2";   SETS[cli]=1; shift 2 ;;
+    -b|--branch) CFG[cli:BRANCH]="$2"; shift 2 ;;
+    -w|--work)   CFG[cli:TREE]="$2";   shift 2 ;;
+    -x|--run)    CFG[cli:RUN]="$2";    shift 2 ;;
+    -i)          INTERACTIVE=1; shift ;;
     -d|--dry-run) DRY=1; shift ;;
-    --full-clone)       FULL=1; shift ;;
-    -v|--version) ver ;;
+    --full-clone) FULL=1; shift ;;
+    -v|--version) echo "v$VER"; exit 0 ;;
     -h|--help)    usage ;;
     --)           shift; ARGS+=("$@"); break ;;
     -*)           ARGS+=("$1"); shift ;;
@@ -34,7 +33,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n $TARGET ]] || usage
 
-# PARSE CONFIG
+# --- INI CONFIG PARSING ---
 HOST="${TARGET##*@}"
 if [[ -f $CFG_FILE ]]; then
   SECTION="default"
@@ -51,102 +50,87 @@ if [[ -f $CFG_FILE ]]; then
        TMP="${BASH_REMATCH[1]}"
        [[ -n ${MAP[$TMP]:-} ]] && { BASE="$TMP"; SUFFIX="${BASH_REMATCH[2],,}"; }
     fi
-
-    [[ -n ${MAP[$BASE]:-} ]] || continue
-    CFG["$SUFFIX:${MAP[$BASE]}"]="$VAL"
-    [[ $SECTION != "default" ]] && SETS[$SUFFIX]=1
+    [[ -n ${MAP[$BASE]:-} ]] && { CFG["$SUFFIX:${MAP[$BASE]}"]="$VAL"; [[ $SECTION != "default" ]] && SETS[$SUFFIX]=1; }
   done < "$CFG_FILE"
 fi
 
-if [[ -v SETS[cli] && -v SETS[default] ]]; then
+# Merge CLI overrides
+if [[ -v SETS[cli] ]]; then
   for K in URL BRANCH DIR BACKUP TREE RUN USER; do
     [[ -n ${CFG[cli:$K]:-} ]] && CFG[default:$K]="${CFG[cli:$K]}"
   done
-  unset SETS[cli]
 fi
 
-# GROUP BY DESTINATION
+# --- GROUPING ---
+get() { echo "${CFG[$1:$2]:-${CFG[default:$2]:-${DEF[$2]}}}"; }
 SORTED=($(printf "%s\n" "${!SETS[@]}" | sort -V))
 [[ ${#SORTED[@]} -eq 0 ]] && die "No config found for '$TARGET'"
 
-get() { echo "${CFG[$1:$2]:-${CFG[default:$2]:-${DEF[$2]}}}"; }
-
 for S in "${SORTED[@]}"; do
   U=$(get "$S" USER); [[ -z $U ]] && U="${TARGET%%@*}"; [[ $U == "$TARGET" ]] && U=""
-  DEST="${U:+$U@}$HOST"
-  BATCHES["$DEST"]+="$S "
+  BATCHES["${U:+$U@}$HOST"]+="$S "
 done
 
-# DRY RUN
-if ((DRY)); then
-  echo ":: Dry Run ::"
-  for DEST in "${!BATCHES[@]}"; do
-    echo "Target: $DEST"
-    for S in ${BATCHES[$DEST]}; do
-      TREE=$(get "$S" TREE); [[ -z $TREE ]] && TREE='$HOME'
-      printf "  [%s] %s (%s) -> %s\n" "$S" "$(get "$S" URL)" "$(get "$S" BRANCH)" "$TREE"
-      RUN=$(get "$S" RUN); [[ -n $RUN ]] && printf "    Run: %s\n" "$RUN"
-    done
-  done
-  exit 0
-fi
-
-# REMOTE SCRIPT
-generate_script() {
-  local DEPTH="--depth 1"; ((FULL)) && DEPTH=""
+# --- REMOTE SCRIPT GENERATION ---
+generate_remote() {
+  local DOPT="--depth 1"; ((FULL)) && DOPT=""
 cat <<EOF
-set -eu
-export GIT_SSH_COMMAND='ssh -F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'
+set -e
+export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
 setup() {
   ID="\$1"; URL="\$2"; BR="\$3"; D="\$4"; BAK="\$5"; TREE="\${6:-\$HOME}"; RUN="\$7"
   GDIR="\$HOME/\$D"
-  echo ":: [\$ID] Syncing \$URL (\$BR)..."
+  echo ":: [\$ID] \$URL (\$BR) -> \$GDIR"
   mkdir -p "\$TREE"
-  if [ -d "\$GDIR" ]; then
-    if [ -f "\$GDIR/config" ]; then git --git-dir="\$GDIR" fetch -q origin
-    else 
-      BPATH="\$HOME/\$BAK-notgit-\$D-\$(date +%s)"
-      echo "   !! \$GDIR exists but isn't git. Backing up to \$BPATH"
-      mv "\$GDIR" "\$BPATH"
-      git clone -q --bare -b "\$BR" $DEPTH "\$URL" "\$GDIR"
-    fi
-  else git clone -q --bare -b "\$BR" $DEPTH "\$URL" "\$GDIR"; fi
+
+  # Clone or Fetch
+  if [ -d "\$GDIR/config" ]; then git --git-dir="\$GDIR" fetch -q origin "\$BR"
+  else git clone -q --bare -b "\$BR" $DOPT "\$URL" "\$GDIR"; fi
   git --git-dir="\$GDIR" config status.showUntrackedFiles no
 
+  # Checkout with Auto-Backup
   if ! git --git-dir="\$GDIR" --work-tree="\$TREE" checkout -q "\$BR" 2>/dev/null; then
-    BPATH="\$HOME/\$BAK-\$BR-\$(date +%s)"
-    echo "   !! Conflict. Backing up to \$BPATH"
-    mkdir -p "\$BPATH"
+    BPATH="\$HOME/\$BAK-\$ID-\$(date +%s)"
+    echo "   !! Conflict. Backing up specific files to \$BPATH"
     git --git-dir="\$GDIR" --work-tree="\$TREE" ls-tree -rz --name-only "\$BR" | \
       xargs -0 -I{} sh -c '[ -e "\$TREE/{}" ] && { mkdir -p "\$BPATH/\$(dirname "{}")"; mv "\$TREE/{}" "\$BPATH/{}"; }'
     git --git-dir="\$GDIR" --work-tree="\$TREE" checkout -fq "\$BR"
   fi
 
-  if [ -n "\$RUN" ]; then
-     echo "   -> Executing: \$RUN"
-     (cd "\$TREE" && eval "\$RUN") || echo "   !! Run failed"
-  fi
+  # Post-Run
+  [ -n "\$RUN" ] && { echo "   -> Executing: \$RUN"; (cd "\$TREE" && eval "\$RUN"); }
+
+  # Alias Marker
   ALIAS="cfg"; [ "\$ID" != "default" ] && ALIAS="cfg-\$ID"
   echo "@@@alias \$ALIAS='/usr/bin/git --git-dir=\$GDIR --work-tree=\$TREE'"
 }
 EOF
 }
 
-# EXECUTE
+# --- EXECUTE ---
 SSH_OPTS=(-o ForwardAgent=yes "${ARGS[@]}")
+RET=0; PIDS=()
 ALIAS_FILE=$(mktemp); trap 'rm -f "$ALIAS_FILE"' EXIT
-PIDS=()
-RET=0
+
+if ((DRY)); then echo ":: Dry Run ::"; fi
 
 for DEST in "${!BATCHES[@]}"; do
   SETS_IN_GROUP=(${BATCHES[$DEST]})
+  if ((DRY)); then
+    echo "Host: $DEST";
+    for S in "${SETS_IN_GROUP[@]}"; do echo "  Job: $S ($(get "$S" URL))"; done
+    continue
+  fi
+
   (
     {
-      generate_script
+      generate_remote
       for S in "${SETS_IN_GROUP[@]}"; do
         printf 'setup %q %q %q %q %q %q %q\n' "$S" "$(get "$S" URL)" "$(get "$S" BRANCH)" "$(get "$S" DIR)" "$(get "$S" BACKUP)" "$(get "$S" TREE)" "$(get "$S" RUN)"
       done
     } | ssh "${SSH_OPTS[@]}" "$DEST" bash -s | while read -r line; do
+        # Capture alias, print everything else
         [[ $line == "@@@"* ]] && echo "${line#@@@}" >> "$ALIAS_FILE" || echo "$line"
     done
   ) & PIDS+=($!)
@@ -155,10 +139,12 @@ done
 for P in "${PIDS[@]}"; do wait "$P" || RET=1; done
 
 if [[ -s $ALIAS_FILE ]]; then
-  cat "$ALIAS_FILE"; echo ""
+  echo -e "\n\033[32m:: Generated Aliases ::\033[0m"
+  cat "$ALIAS_FILE"
 fi
 
 if [[ $INTERACTIVE == 1 && $RET == 0 ]]; then
+  echo ":: Connecting to $TARGET..."
   exec ssh -t "${SSH_OPTS[@]}" "$TARGET"
 fi
 exit $RET
