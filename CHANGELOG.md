@@ -1,7 +1,15 @@
-v0.4.13 (TO RELEASE)
-    - output alias info at the end of run DONE
-    - detect shell + show shell relevant script lines to append it to shell rc (?)
+v0.4.14
+    - code optimize / refactor simplify
+    - aim for bash 3.2
     - switch to sh compatibile (?)
+    - better usage string (explain, --version, --verbose, --quiet) - follow off
+    - getoptions (??)
+
+v0.4.13 (TO RELEASE)
+    - be bash 3.0+ friendly & supports sh version at same time - inprogress
+
+    - remove -A agent forward and do it by default
+    - output alias info at the end of run
 
 v0.4.12
     - configure per repo post script

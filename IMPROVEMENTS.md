@@ -12,3 +12,10 @@ TODO
 --
 
 - minor, fix cfg lg log etc (diff-so-fancy dep)
+
+
+so,
+
+something like
+
+<env>-<resource>-<subconfig>
