@@ -4,8 +4,7 @@
 set -euo pipefail
 
 # --- Setup & Defaults ---
-declare -A DEF C SSETS TARGET_USERS
-# Added RUN to defaults
+declare -A DEF C SSETS TARGET_USERS CLI_SEEN
 DEF=( ["URL"]="" ["BRANCH"]="develop" ["DIR"]=".dot" ["BACKUP"]=".dot-backup" ["TREE"]="" ["RUN"]="" )
 
 ver() { echo "shgittp v0.4.12"; exit 0; }
@@ -13,7 +12,6 @@ die() { echo "!! $*" >&2; exit 1; }
 usage() { echo "Usage: shgittp [-r URL] [-b BRANCH] [-w DIR] [-x CMD] [-Aidi] [user@]host"; exit 0; }
 
 CFG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
-# Added RUN_COMMAND to regex keys
 REGEX_KEYS="REPO_URL|BRANCH|DOTFILES_DIR|BACKUP_DIR_PREFIX|TARGET_WORK_TREE|USER|RUN_COMMAND"
 
 ARGS=() TARGET="" AGENT=0 INTERACTIVE=0 DRY=0 FULL=0
@@ -22,14 +20,13 @@ ARGS=() TARGET="" AGENT=0 INTERACTIVE=0 DRY=0 FULL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -r|--repo)      (( $# > 1 )) || die "Option $1 requires an argument"
-                    C["default,URL"]=$2; SSETS["default"]=1; shift 2 ;;
+                    C["default,URL"]=$2; SSETS["default"]=1; CLI_SEEN["default,URL"]=1; shift 2 ;;
     -b|--branch)    (( $# > 1 )) || die "Option $1 requires an argument"
-                    C["default,BRANCH"]=$2; shift 2 ;;
+                    C["default,BRANCH"]=$2; CLI_SEEN["default,BRANCH"]=1; shift 2 ;;
     -w|--work-tree) (( $# > 1 )) || die "Option $1 requires an argument"
-                    C["default,TREE"]=$2; shift 2 ;;
+                    C["default,TREE"]=$2; CLI_SEEN["default,TREE"]=1; shift 2 ;;
     -x|--run)       (( $# > 1 )) || die "Option $1 requires an argument"
-                    # Maps CLI -x directly to the default set's RUN property
-                    C["default,RUN"]=$2; shift 2 ;;
+                    C["default,RUN"]=$2; CLI_SEEN["default,RUN"]=1; shift 2 ;;
     -A|--agent)     AGENT=1; shift ;;
     -i|--interactive) INTERACTIVE=1; shift ;;
     -d|--dry-run)   DRY=1; shift ;;
@@ -62,35 +59,26 @@ if [[ -f $CFG_FILE ]]; then
         TARGET_WORK_TREE) K="TREE" ;;
         RUN_COMMAND) K="RUN" ;;
       esac
-      # CLI args take precedence
-      [[ -z ${C["$SFX,$K"]:-} ]] && C["$SFX,$K"]=$VAL
+      [[ -z ${CLI_SEEN["$SFX,$K"]:-} ]] && C["$SFX,$K"]=$VAL
     fi
   done < "$CFG_FILE"
 fi
 
-# Sort sets version-numerically
 IFS=$'\n' SORTED_SETS=($(printf "%s\n" "${!SSETS[@]}" | sort -V)); unset IFS
 (( ${#SORTED_SETS[@]} )) || die "No repositories configured."
 
 # --- Target Resolution ---
 T_USER="${TARGET%%@*}"; [[ $T_USER == "$TARGET" ]] && T_USER=""
-
 for S in "${SORTED_SETS[@]}"; do
   [[ -z ${C["$S,URL"]:-} ]] && die "Set '$S' missing URL"
   U=${C["$S,USER"]:-}; [[ -n $U ]] && TARGET_USERS["$U"]=1
 done
 
-if [[ -n $T_USER ]]; then
-  DESTS=("$TARGET")
+if [[ -n $T_USER ]]; then DESTS=("$TARGET")
 elif (( ${#TARGET_USERS[@]} )); then
-  DESTS=()
-  for U in "${!TARGET_USERS[@]}"; do DESTS+=("$U@$TARGET"); done
-  for S in "${SORTED_SETS[@]}"; do
-    [[ -z ${C["$S,USER"]:-} ]] && { DESTS+=("$TARGET"); break; }
-  done
-else
-  DESTS+=("$TARGET")
-fi
+  DESTS=(); for U in "${!TARGET_USERS[@]}"; do DESTS+=("$U@$TARGET"); done
+  for S in "${SORTED_SETS[@]}"; do [[ -z ${C["$S,USER"]:-} ]] && { DESTS+=("$TARGET"); break; }; done
+else DESTS+=("$TARGET"); fi
 
 # --- Dry Run ---
 if ((DRY)); then
@@ -100,7 +88,7 @@ if ((DRY)); then
       SU=${C["$S,USER"]:-}
       [[ -n $SU && -n $DU && $SU != "$DU" ]] && echo "    - [$S] (skipped: USER mismatch)" && continue
       R_CMD=${C["$S,RUN"]:-}
-      echo "    - [$S] ${C["$S,URL"]}"
+      echo "    - [$S] ${C["$S,URL"]} (Branch: ${C["$S,BRANCH"]:-${C["default,BRANCH"]:-${DEF["BRANCH"]}}})"
       [[ -n $R_CMD ]] && echo "      -> Run: $R_CMD"
     done
   done; exit 0
@@ -115,7 +103,9 @@ log() { printf "[%s] %s\n" "\$1" "\$2"; }
 do_git() {
   ID=\$1; URL=\$2; BR=\$3; GDIR=\$4; BAK=\$5; TREE=\${6:-\$HOME}
   GIT_DIR="\$HOME/\$GDIR"; mkdir -p "\$TREE"
+  # Define wrapper to handle bare repo
   git() { command git --git-dir="\$GIT_DIR" --work-tree="\$TREE" "\$@"; }
+
   if [ -d "\$GIT_DIR" ]; then
     log "\$ID" "Fetching..."
     git fetch -q origin || exit 1
@@ -142,6 +132,10 @@ do_git() {
   ALIAS="cfg"; SUFFIX=\$(echo "\$ID" | tr '[:upper:]' '[:lower:]')
   [ "\$ID" != "default" ] && ALIAS="cfg-\$SUFFIX"
   log "\$ID" "Alias: \$ALIAS='git --git-dir=\$GIT_DIR --work-tree=\$TREE'"
+
+  unset -f git
+  unset GIT_DIR
+  unset GIT_WORK_TREE
 }
 EOF
 }
@@ -159,24 +153,23 @@ for DST in "${DESTS[@]}"; do
         SU=${C["$S,USER"]:-}
         [[ -n $SU && -n $DU && $SU != "$DU" ]] && continue
 
-        # Prepare variables
         TREE_VAL="${C["$S,TREE"]:-${C["default,TREE"]:-${DEF["TREE"]}}}"
         RUN_VAL="${C["$S,RUN"]:-}"
 
-        # Generate Git Block
         printf 'do_git %q %q %q %q %q %q\n' "$S" "${C["$S,URL"]}" \
           "${C["$S,BRANCH"]:-${C["default,BRANCH"]:-${DEF["BRANCH"]}}}" \
           "${C["$S,DIR"]:-${C["default,DIR"]:-${DEF["DIR"]}}}" \
           "${C["$S,BACKUP"]:-${C["default,BACKUP"]:-${DEF["BACKUP"]}}}" \
           "$TREE_VAL"
 
-        # Generate Run Block (executes immediately after this repo's git ops)
         if [[ -n $RUN_VAL ]]; then
-           # Default to HOME if tree is empty, ensuring 'cd' works
-           CD_PATH="${TREE_VAL:-\$HOME}"
-           printf 'log %q "Running: %s"\n' "$S" "$RUN_VAL"
-           # Run in a subshell or chained command to preserve cwd for next iter
-           printf '(cd %q && %s)\n' "$CD_PATH" "$RUN_VAL"
+            if [[ -z "$TREE_VAL" ]]; then
+                printf 'log %q "Running setup in \$HOME..."\n' "$S"
+                printf '(cd && %s)\n' "$RUN_VAL"
+            else
+                printf 'log %q "Running setup in %s..."\n' "$S" "$TREE_VAL"
+                printf '(cd %q && %s)\n' "$TREE_VAL" "$RUN_VAL"
+            fi
         fi
       done
 
