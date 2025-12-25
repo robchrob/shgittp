@@ -1,168 +1,145 @@
 #!/usr/bin/env bash
-# shgittp - Portable Dotfiles Bootstrapper
-# License: MIT
+# shgittp v0.5.3
 set -euo pipefail
 
-# --- 1. Setup & Defaults ---
-VER="0.4.12"
-ver()   { echo "shgittp v$VER"; exit 0; }
-die()   { echo -e "\033[31m!! $*\033[0m" >&2; exit 1; }
-usage() { echo -e "shgittp v$VER\n\t[-r URL] [-b BRANCH] [-w DIR] [-x CMD] [-Aid] [--clone-full] [user@]host"; exit 0; }
-
+# SETUP & CLI
+die() { echo -e "\033[31m!! $*\033[0m" >&2; exit 1; }
 declare -A CFG USERS SETS DEF
 DEF=([URL]="" [BRANCH]="develop" [DIR]=".dot" [BACKUP]=".dot-backup" [TREE]="" [RUN]="")
-
 CFG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
 ARGS=() TARGET="" AGENT=0 INTERACTIVE=0 DRY=0 FULL=0
 
-# --- 2. CLI Parsing ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -r|--repo)      CFG[default:URL]="$2"; SETS[default]=1; shift 2 ;;
-    -b|--branch)    CFG[default:BRANCH]="$2"; shift 2 ;;
-    -w|--work-tree) CFG[default:TREE]="$2"; shift 2 ;;
-    -x|--run)       CFG[default:RUN]="$2"; shift 2 ;;
-    -A|--agent)     AGENT=1; shift ;;
-    -i|--interactive) INTERACTIVE=1; shift ;;
-    -d|--dry-run)   DRY=1; shift ;;
-    --clone-full)   FULL=1; shift ;;
-    -v|--version)   ver ;;
-    -h|--help)      usage ;;
-    --)             shift; ARGS+=("$@"); break ;;
-    -*)             ARGS+=("$1"); shift ;;
-    *)              [[ -z $TARGET ]] && TARGET="$1" || ARGS+=("$1"); shift ;;
+    -r|--repo)    CFG[default:URL]="$2"; SETS[default]=1; shift 2 ;;
+    -b|--branch)  CFG[default:BRANCH]="$2"; shift 2 ;;
+    -w|--work)    CFG[default:TREE]="$2"; shift 2 ;;
+    -x|--run)     CFG[default:RUN]="$2"; shift 2 ;;
+    -A|--agent)   AGENT=1; shift ;;
+    -i)           INTERACTIVE=1; shift ;;
+    -d|--dry-run) DRY=1; shift ;;
+    --clone-full) FULL=1; shift ;;
+    --)           shift; ARGS+=("$@"); break ;;
+    -*)           ARGS+=("$1"); shift ;;
+    *)            TARGET="$1"; shift ;;
   esac
 done
-[[ -n $TARGET ]] || usage
+[[ -n $TARGET ]] || die "Usage: shgittp [options] [user@]host"
 
-# --- 3. Config Parsing ---
+# CFG PARSE
 HOST="${TARGET##*@}"
 if [[ -f $CFG_FILE ]]; then
   SECTION="default"
-  while IFS= read -r line || [[ -n $line ]]; do
-    line="${line#"${line%%[![:space:]]*}"}"  # ltrim
-    line="${line%"${line##*[![:space:]]}"}"  # rtrim
-    [[ -z $line || $line =~ ^# ]] && continue
-    if [[ $line =~ ^\[(.+)\]$ ]]; then
-      SECTION="${BASH_REMATCH[1]}"
-      continue
-    fi
+  while IFS='=' read -r KEY VAL || [[ -n $KEY ]]; do
+    [[ $KEY =~ ^[[:space:]]*# || -z $KEY ]] && continue
+    if [[ $KEY =~ ^\[(.+)\]$ ]]; then SECTION="${BASH_REMATCH[1]}"; continue; fi
     [[ $SECTION =~ ^(global|$HOST|$TARGET|default)$ ]] || continue
-    if [[ $line =~ ^([A-Z_][A-Z0-9_]*)=(.*)$ ]]; then
-      KEY="${BASH_REMATCH[1]}"
-      VAL="${BASH_REMATCH[2]}"
-      [[ $VAL =~ ^\"(.*)\"$ || $VAL =~ ^\'(.*)\'$ ]] && VAL="${BASH_REMATCH[1]}"
-      SUFFIX="default"
-      if [[ $KEY =~ ^(.+)_([A-Z][A-Z0-9]*)$ ]]; then
-        case "${BASH_REMATCH[1]}" in
-          REPO_URL|BRANCH|DOTFILES_DIR|BACKUP_DIR_PREFIX|TARGET_WORK_TREE|USER|RUN_COMMAND)
-            BASE="${BASH_REMATCH[1]}"
-            SUFFIX="${BASH_REMATCH[2],,}"  # lowercase
-            ;;
-          *) BASE="$KEY" ;;
-        esac
-      else
-        BASE="$KEY"
-      fi
-      case "$BASE" in
-        REPO_URL)          IKEY="URL"; SETS[$SUFFIX]=1 ;;
-        DOTFILES_DIR)      IKEY="DIR" ;;
-        BACKUP_DIR_PREFIX) IKEY="BACKUP" ;;
-        TARGET_WORK_TREE)  IKEY="TREE" ;;
-        RUN_COMMAND)       IKEY="RUN" ;;
-        BRANCH)            IKEY="BRANCH" ;;
-        USER)              IKEY="USER" ;;
-        *)                 continue ;;
-      esac
 
-      CFG[$SUFFIX:$IKEY]="$VAL"
+    KEY="${KEY%%[[:space:]]*}"; VAL="${VAL##[[:space:]]}"; VAL="${VAL%%[[:space:]]}"
+    VAL="${VAL%[\"\']}"; VAL="${VAL#[\"\']}"
+
+    SUFFIX="default"; BASE="$KEY"
+    if [[ $KEY =~ ^(.+)_([A-Z0-9]+)$ ]]; then
+       case "${BASH_REMATCH[1]}" in
+         REPO_URL|BRANCH|DOTFILES_DIR|BACKUP_DIR_PREFIX|TARGET_WORK_TREE|USER|RUN_COMMAND)
+           BASE="${BASH_REMATCH[1]}"; SUFFIX="${BASH_REMATCH[2],,}" ;;
+       esac
     fi
+
+    case "$BASE" in
+      REPO_URL) IKEY="URL"; SETS[$SUFFIX]=1 ;;
+      DOTFILES_DIR) IKEY="DIR" ;; BACKUP_DIR_PREFIX) IKEY="BACKUP" ;;
+      TARGET_WORK_TREE) IKEY="TREE" ;; RUN_COMMAND) IKEY="RUN" ;;
+      BRANCH) IKEY="BRANCH" ;; USER) IKEY="USER" ;;
+      *) continue ;;
+    esac
+    CFG[$SUFFIX:$IKEY]="$VAL"
   done < "$CFG_FILE"
 fi
 
-IFS=$'\n' SORTED_KEYS=($(printf "%s\n" "${!SETS[@]}" | sort -V)); unset IFS
-(( ${#SORTED_KEYS[@]} )) || die "No repositories configured for target '$HOST'."
+SORTED_KEYS=($(printf "%s\n" "${!SETS[@]}" | sort -V))
+(( ${#SORTED_KEYS[@]} )) || die "No config found for '$HOST'"
 
-# --- 4. Target Resolution ---
+# TARGET MATCHING
 T_USER="${TARGET%%@*}"; [[ $T_USER == "$TARGET" ]] && T_USER=""
-for S in "${SORTED_KEYS[@]}"; do
-  [[ -z ${CFG[$S:URL]:-} ]] && die "Set '$S' missing URL."
-  U="${CFG[$S:USER]:-}"; [[ -n $U ]] && USERS[$U]=1
-done
 DESTS=()
+
 if [[ -n $T_USER ]]; then
   DESTS+=("$TARGET")
-elif (( ${#USERS[@]} )); then
-  for U in "${!USERS[@]}"; do DESTS+=("$U@$HOST"); done
-  for S in "${SORTED_KEYS[@]}"; do [[ -z ${CFG[$S:USER]:-} ]] && { DESTS+=("$TARGET"); break; }; done
 else
-  DESTS+=("$TARGET")
+  HAS_USERS=0
+  for S in "${SORTED_KEYS[@]}"; do
+    U="${CFG[$S:USER]:-}"
+    if [[ -n $U ]]; then
+       USERS[$U]=1
+       HAS_USERS=1
+    fi
+  done
+
+  if (( HAS_USERS )); then
+    for U in "${!USERS[@]}"; do DESTS+=("$U@$HOST"); done
+  else
+    DESTS+=("$TARGET")
+  fi
 fi
 
-# --- 5. Helpers ---
-get_val() {
-  local S=$1 K=$2
-  echo "${CFG[$S:$K]:-${CFG[default:$K]:-${DEF[$K]}}}"
-}
+get_val() { echo "${CFG[$1:$2]:-${CFG[default:$2]:-${DEF[$2]}}}"; }
 
 if ((DRY)); then
   echo ":: Dry Run ::"
   for DST in "${DESTS[@]}"; do
-    echo "Target: $DST"
     DU="${DST%%@*}"; [[ $DU == "$DST" ]] && DU=""
+    echo "Target: $DST"
     for S in "${SORTED_KEYS[@]}"; do
       SU="${CFG[$S:USER]:-}"
       [[ -n $SU && -n $DU && $SU != "$DU" ]] && continue
-      TREE=$(get_val "$S" TREE); [[ -z $TREE ]] && TREE="\$HOME"
-      echo "  ➜ [$S] $(get_val "$S" URL) ($(get_val "$S" BRANCH)) -> $TREE"
+      echo "  ➜ [$S] $(get_val "$S" URL) ($(get_val "$S" BRANCH)) -> $(get_val "$S" TREE)"
       echo "     Run: $(get_val "$S" RUN)"
     done
   done
   exit 0
 fi
 
-# --- 6. Remote Payload ---
+# PAYLOAD & EXEC
 generate_payload() {
   local target_label="$1"
 cat <<EOF
 set -euo pipefail
 export GIT_SSH_COMMAND='ssh -F /dev/null -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR'
+rm -f "\$HOME/.shgittp_aliases"
 setup_repo() {
   local ID="\$1" URL="\$2" BR="\$3" GDIR="\$4" BAK="\$5" TREE="\${6:-\$HOME}" RUN="\$7"
   local GIT_DIR="\$HOME/\$GDIR"
   local ALIAS="cfg"; [[ \$ID != "default" ]] && ALIAS="cfg-\${ID,,}"
   mkdir -p "\$TREE"
-  # 1. Fetch
-  if [[ -d \$GIT_DIR ]]; then
-    git --git-dir="\$GIT_DIR" fetch -q origin
+  if [[ -d \$GIT_DIR ]]; then git --git-dir="\$GIT_DIR" fetch -q origin
   else
-    local ARGS="--bare -b \$BR \$URL \$GIT_DIR"
-    [[ $FULL == 0 ]] && ARGS="--depth 1 \$ARGS"
-    git clone -q \$ARGS || { echo "[$target_label:\$ID] Clone failed"; exit 1; }
+    local GOPT="--bare -b \$BR \$URL \$GIT_DIR"
+    [[ $FULL == 0 ]] && GOPT="--depth 1 \$GOPT"
+    git clone -q \$GOPT || exit 1
   fi
-  # 2. Checkout
   git --git-dir="\$GIT_DIR" config status.showUntrackedFiles no
   if ! git --git-dir="\$GIT_DIR" --work-tree="\$TREE" checkout -q "\$BR" 2>/dev/null; then
-    local BAK_PATH="\$HOME/\$BAK-\$BR-\$(date +%s)"
-    echo "[$target_label:\$ID] Conflict detected, backing up to \$BAK_PATH"
-    mkdir -p "\$BAK_PATH"
-    git --git-dir="\$GIT_DIR" --work-tree="\$TREE" ls-tree -rz --name-only "\$BR" | \\
-      xargs -0 -I{} sh -c '[[ -e "\$TREE/{}" ]] && { mkdir -p "\$BAK_PATH/\$(dirname "{}")"; mv "\$TREE/{}" "\$BAK_PATH/{}"; }'
+    local BP="\$HOME/\$BAK-\$BR-\$(date +%s)"
+    mkdir -p "\$BP"
+    git --git-dir="\$GIT_DIR" --work-tree="\$TREE" ls-tree -rz --name-only "\$BR" | \
+      xargs -0 -I{} sh -c '[[ -e "\$TREE/{}" ]] && { mkdir -p "\$BP/\$(dirname "{}")"; mv "\$TREE/{}" "\$BP/{}"; }'
     git --git-dir="\$GIT_DIR" --work-tree="\$TREE" checkout -fq "\$BR"
   fi
-  echo "[$target_label:\$ID] Sync done: \$URL (\$BR)"
-  # 3. Post-Run
-  [[ -n \$RUN ]] && { echo "[$target_label:\$ID] Running \"\$RUN\" in \$TREE..."; (cd "\$TREE" && eval "\$RUN") || echo "[$target_label:\$ID] Command failed"; }
-  # 4. Alias
-  echo "alias \$ALIAS='/usr/bin/git --git-dir=\$GIT_DIR --work-tree=\$TREE'" >> "\$HOME/.shgittp_aliases"
+  echo "[$target_label:\$ID] Cloned \$URL (\$BR)"
+  if [[ -n \$RUN ]]; then
+     echo "[$target_label:\$ID] Running: \$RUN"
+     (cd "\$TREE" && eval "\$RUN") || true
+  fi
+  echo "@@@ALIAS@@@alias \$ALIAS='/usr/bin/git --git-dir=\$GIT_DIR --work-tree=\$TREE'"
 }
-rm -f "\$HOME/.shgittp_aliases"
 EOF
 }
 
-# --- 7. Main Execution ---
 SSH_OPTS=(-o ForwardAgent=$([[ $AGENT == 1 ]] && echo yes || echo no) "${ARGS[@]}")
 PIDS=()
+ALIAS_DIR=$(mktemp -d); trap 'rm -rf "$ALIAS_DIR"' EXIT
+RET=0
 
 for DST in "${DESTS[@]}"; do
   DU="${DST%%@*}"; [[ $DU == "$DST" ]] && DU=""
@@ -172,18 +149,21 @@ for DST in "${DESTS[@]}"; do
       for S in "${SORTED_KEYS[@]}"; do
         SU="${CFG[$S:USER]:-}"
         [[ -n $SU && -n $DU && $SU != "$DU" ]] && continue
-
-        printf 'setup_repo %q %q %q %q %q %q %q\n' \
-          "$S" "$(get_val "$S" URL)" "$(get_val "$S" BRANCH)" \
-          "$(get_val "$S" DIR)" "$(get_val "$S" BACKUP)" \
-          "$(get_val "$S" TREE)" "$(get_val "$S" RUN)"
+        printf 'setup_repo %q %q %q %q %q %q %q\n' "$S" "$(get_val "$S" URL)" "$(get_val "$S" BRANCH)" "$(get_val "$S" DIR)" "$(get_val "$S" BACKUP)" "$(get_val "$S" TREE)" "$(get_val "$S" RUN)"
       done
-      echo 'echo ""'
-      echo '[[ -f $HOME/.shgittp_aliases ]] && { echo "Git aliases:"; cat "$HOME/.shgittp_aliases"; rm "$HOME/.shgittp_aliases"; }'
-      [[ $INTERACTIVE == 1 ]] && echo 'exec $SHELL -l' || echo 'exit 0'
-    } | ssh "${SSH_OPTS[@]}" "$DST" bash -s
+      echo "exit 0"
+    } | ssh "${SSH_OPTS[@]}" "$DST" bash -s | while read -r line; do
+        [[ $line == "@@@ALIAS@@@"* ]] && echo "${line#@@@ALIAS@@@}" >> "$ALIAS_DIR/aliases" || echo "$line"
+    done
   ) & PIDS+=($!)
 done
 
-RET=0; for P in "${PIDS[@]}"; do wait "$P" || RET=1; done
+for P in "${PIDS[@]}"; do wait "$P" || RET=1; done
+
+[[ -f "$ALIAS_DIR/aliases" ]] && { echo ""; cat "$ALIAS_DIR/aliases"; echo ""; }
+
+if [[ $INTERACTIVE == 1 && $RET == 0 ]]; then
+  echo ":: Connecting to ${DESTS[0]} ::"
+  exec ssh -t "${SSH_OPTS[@]}" "${DESTS[0]}"
+fi
 exit $RET

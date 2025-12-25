@@ -1,6 +1,7 @@
 v0.4.13 (TO RELEASE)
-    - switch to sh compatibile (?)
+    - output alias info at the end of run DONE
     - detect shell + show shell relevant script lines to append it to shell rc (?)
+    - switch to sh compatibile (?)
 
 v0.4.12
     - configure per repo post script
