@@ -1,0 +1,85 @@
+#!/bin/sh
+# Test shgittp POSIX config parser
+
+set -eu
+
+die() { printf '\033[31m!! %s\033[0m\n' "$*" >&2; exit 1; }
+
+# --- PARSER (copy this into shgittp) ---
+TARGET="${1:-}"
+HOST=${TARGET##*@}
+[ -z "$TARGET" ] && { printf 'usage: %s [user@]host\n' "$0" >&2; exit 1; }
+
+CFG="./shgittp.config"
+cur=""; suf=""
+[ -f "$CFG" ] && {
+  while IFS='=' read -r k v; do
+    case $k in ''|'#'*) continue;; esac
+    k=${k#"${k%%[! ]*}"}; k=${k%"${k##*[! ]}"}
+    case $k in
+      \[*\])
+        sect=${k#\[}; sect=${sect%\]}
+        suf=default; case $sect in *:*) suf=${sect##*:}; sect=${sect%%:*};; esac
+        case $sect in "$TARGET"|"$HOST"|default) cur=$suf;; *) cur="";; esac
+        continue;;
+    esac
+    [ -z "$cur" ] && continue
+    v=${v#"${v%%[! ]*}"}; v=${v%"${v##*[! ]}"}
+    v=${v#\"}; v=${v%\"}; v=${v#\'}; v=${v%\'}
+    case $k in
+      repo)    key=REPO_URL ;;
+      branch)  key=BRANCH ;;
+      dir)     key=DIR ;;
+      tree)    key=TREE ;;
+      run)     key=RUN ;;
+      user)    key=USER ;;
+      REPO_URL|BRANCH|DIR|TREE|RUN|USER) key=$k ;;
+      *)       continue;;
+    esac
+    eval "cfg_${cur}_${key}=\$v"
+    [ "$cur" != "default" ] && eval "job_${cur}=1"
+  done < "$CFG"
+}
+
+get() {
+  suf=$1 key=$2
+  eval "r=\${cfg_${suf}_${key}-}"
+  [ -n "$r" ] || eval "r=\${cfg_default_${key}-}"
+  printf '%s\n' "$r"
+}
+
+jobs=$(set | grep '^job_' | cut -d_ -f2- | cut -d= -f1 | sort -V 2>/dev/null || true)
+[ -z "$jobs" ] && die "No configuration found for '$TARGET'"
+
+for j in $jobs; do
+  u=$(get $j USER)
+  : ${u:=${TARGET%%@*}}
+  [ "$u" = "$TARGET" ] && u=""
+  c=${u:+$u@}$HOST
+  eval "batch_${c}=\${batch_${c}}${j} "
+done
+# --- END PARSER ---
+
+# --- DEBUG OUTPUT ---
+printf '\n\033[36m=== Testing target: %s ===\033[0m\n' "$TARGET"
+printf '\n\033[33mParsed variables:\033[0m\n'
+set | grep '^cfg_' | sort
+
+printf '\n\033[33mJobs found:\033[0m\n'
+for j in $jobs; do
+  printf '  job_%s:\n' "$j"
+  printf '    repo   = %s\n' "$(get $j REPO_URL)"
+  printf '    branch = %s\n' "$(get $j BRANCH)"
+  printf '    dir    = %s\n' "$(get $j DIR)"
+  printf '    tree   = %s\n' "$(get $j TREE)"
+  printf '    run    = %s\n' "$(get $j RUN)"
+  printf '    user   = %s\n' "$(get $j USER)"
+done
+
+printf '\n\033[33mBatches:\033[0m\n'
+set | grep '^batch_' | while IFS='=' read -r name val; do
+  conn=${name#batch_}
+  printf '  %s -> %s\n' "$conn" "$val"
+done
+
+printf '\n'
