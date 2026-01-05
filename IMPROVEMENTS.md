@@ -1,19 +1,6 @@
-Requirements:
-Minimalistic but complete (current parameters are enough), we need to work on determining if these below are done as we would expect.
-Code must be highly specialized, concise, minimalistic but fully functional.
-Must be ultra to the point, all heavylifting must be done in shgittp, but we also need to keep code readable and short.
+Git without git.
 
+Right, we want to handle systems without git - just sh/coreutils. We must do all the basic operations somehow or bootstrap ourselfs platform independently.
+Looks like a complex and trick feature. It must be throughtly discussed and checked.
 
-TODO
-- conflicts checker cli tool (sh) - runs alongside with cfg-suffix  (so we can list all conflicts backups created sorted by most recent)
-
---
-
-- minor, fix cfg lg log etc (diff-so-fancy dep)
-
-<env>-<resource>-<subconfig> - looks nice.
-
-
----
-
-refine naming / big scope test run / dry run with payload -D?
+For that we want to have another docker environment without git and iterate on the solution.
