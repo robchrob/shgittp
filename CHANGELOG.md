@@ -1,16 +1,11 @@
-v0.4.14
+v0.4.14 (TO BE RELEASED)
+    - PoC of git boostrapping (operations without git available)
     - code optimize / refactor simplify
-    - aim for bash 3.2
-    - switch to sh compatibile (?)
-    - better usage string (explain, --version, --verbose, --quiet) - follow off
-    - getoptions (??)
+    - switch to POSIX sh compatibile
 
-v0.4.13 (TO RELEASE)
-    - logging clear (no ::)and to the point
+v0.4.13
     - no separate backup var
     - simpler conf format
-    - be bash 3.0+ friendly & supports sh version at same time - inprogress
-
     - remove -A agent forward and do it by default
     - output alias info at the end of run
 
