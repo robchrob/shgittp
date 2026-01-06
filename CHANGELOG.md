@@ -1,7 +1,14 @@
-v0.4.14 (TO BE RELEASED)
-    - PoC of git boostrapping (operations without git available)
-    - code optimize / refactor simplify
-    - switch to POSIX sh compatibile
+v0.4.14
+    - Git bootstrapping: deploy to hosts without git installed
+      - Auto-detects git availability on remote
+      - Falls back to local clone + tar transfer when git unavailable
+      - Transfers both bare repo and worktree (git works after installing git)
+      - Seamless transition: run again with git for normal updates
+    - Fix: config file detection uses -f instead of -d
+    - Fix: CLI -r flag now creates a default job
+    - Fix: Variable name sanitization for hostnames with hyphens
+    - New docker variant: alpine-nogit for testing git bootstrap
+    - New Makefile target: runnogit
 
 v0.4.13
     - no separate backup var

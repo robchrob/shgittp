@@ -1,8 +1,8 @@
-# shgittp v0.4.13 Makefile
+# shgittp v0.4.14 Makefile
 BIN_DIR = $(HOME)/.bin
 CONF_DIR = $(HOME)/.config/shgittp
 
-.PHONY: install uninstall reinstall test clean run
+.PHONY: install uninstall reinstall test clean run runnogit
 
 install:
 	@echo "Installing shgittp..."
@@ -31,6 +31,9 @@ run:
 
 runroot:
 	@./docker/manage.sh alpine-root restart && make reinstall && time shgittp -A endpoint
+
+runnogit:
+	@PORT=2223 ./docker/manage.sh alpine-nogit restart && make reinstall && shgittp -A -i -r git@github.com:robchrob/dotfiles-bare.git -b minimal dev@devbox-nogit
 
 uninstall: clean
 	@echo "Uninstall complete."

@@ -2,7 +2,7 @@
 # shgittp-sh - Minimal SSH dotfiles bootstrap (POSIX version)
 set -eu
 
-VER="0.4.13"
+VER="0.4.14"
 die() { printf '\033[31m!! %s\033[0m\n' "$*" >&2; exit 1; }
 usage() { printf 'shgittp v%s\n\t[-r URL] [-b BRANCH] [-w DIR] [-d DIR] [-x CMD] [-i] [--dry-run] [--full-clone] [user@]host\n' "$VER"; exit 0; }
 
@@ -90,7 +90,7 @@ if [ -f "$CFG_FILE" ]; then
 fi
 
 # CLI overrides -> default config
-[ -n "$cli_REPO_URL" ] && cfg_default_REPO_URL="$cli_REPO_URL"
+[ -n "$cli_REPO_URL" ] && { cfg_default_REPO_URL="$cli_REPO_URL"; job_default=1; }
 [ -n "$cli_BRANCH" ]   && cfg_default_BRANCH="$cli_BRANCH"
 [ -n "$cli_DIR" ]      && cfg_default_DIR="$cli_DIR"
 [ -n "$cli_TREE" ]     && cfg_default_TREE="$cli_TREE"
@@ -110,14 +110,14 @@ jobs=$(set | grep '^job_' | cut -d_ -f2 | cut -d= -f1 | sort -V 2>/dev/null || s
 [ -z "$jobs" ] && die "No configuration found for '$TARGET'"
 
 # Group jobs into batches by connection string
-# Use sanitized var names (replace @ with _AT_)
+# Sanitize var names (replace @ and - with _)
 batch_list=""
 for j in $jobs; do
   u=$(get "$j" USER)
   : "${u:=${TARGET%%@*}}"
   [ "$u" = "$TARGET" ] && u=""
   conn="${u:+$u@}$HOST"
-  conn_var=$(printf '%s' "$conn" | tr '@' '_')
+  conn_var=$(printf '%s' "$conn" | tr '@-' '__')
   eval "batch_${conn_var}=\"\${batch_${conn_var}-}$j \""
   eval "conn_${conn_var}=\"\$conn\""
   case " $batch_list " in
@@ -126,10 +126,8 @@ for j in $jobs; do
   esac
 done
 
-# Generate remote deploy script
+# Generate remote deploy script (when git is available)
 remote_script() {
-  depth="--depth 1"
-  [ "$FULL" -eq 1 ] && depth=""
   cat <<'REMOTE'
 set -e
 export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
@@ -138,7 +136,7 @@ deploy() {
   gitdir="$HOME/$dotdir"
   echo "[$id] $url ($branch) -> $gitdir"
   mkdir -p "$tree"
-  if [ -d "$gitdir/config" ]; then
+  if [ -f "$gitdir/config" ]; then
     git --git-dir="$gitdir" fetch -q origin "$branch"
   else
     git clone -q --bare -b "$branch" DEPTH_PLACEHOLDER "$url" "$gitdir"
@@ -154,6 +152,92 @@ deploy() {
   [ -n "$run" ] && { echo "  Running: $run"; (cd "$tree" && eval "$run"); }
 }
 REMOTE
+}
+
+# Check if remote has git
+remote_has_git() {
+  _dest="$1"
+  eval "ssh $EXTRA_ARGS \"\$_dest\" 'command -v git >/dev/null 2>&1 && echo 1 || echo 0'" 2>/dev/null
+}
+
+# Deploy without git: clone locally, tar bare repo + worktree, pipe to remote
+# Sends both .git (bare) and worktree so git works if installed later
+deploy_nogit() {
+  _dest="$1" _id="$2" _url="$3" _branch="$4" _dotdir="$5" _tree="$6" _run="$7"
+  _depth_arg="--depth 1"; [ "$FULL" -eq 1 ] && _depth_arg=""
+  _remote_tree="${_tree:-\$HOME}"
+
+  # Create temp dir for local clone
+  _tmpdir=$(mktemp -d)
+  trap "rm -rf '$_tmpdir'" EXIT
+
+  printf '[%s] %s (%s) -> ~/%s [nogit bootstrap]\n' "$_id" "$_url" "$_branch" "$_dotdir"
+
+  # Clone bare repo locally
+  git clone -q --bare -b "$_branch" $_depth_arg "$_url" "$_tmpdir/bare.git" || {
+    printf '  \033[31mFailed to clone %s\033[0m\n' "$_url" >&2
+    rm -rf "$_tmpdir"
+    return 1
+  }
+
+  # Checkout worktree locally
+  mkdir -p "$_tmpdir/tree"
+  git --git-dir="$_tmpdir/bare.git" --work-tree="$_tmpdir/tree" checkout -q "$_branch"
+  git --git-dir="$_tmpdir/bare.git" config status.showUntrackedFiles no
+
+  # Create tar: bare repo renamed to dotdir, worktree files go to tree dir
+  # Structure: $dotdir/ (bare repo), tree/ (worktree files)
+  mv "$_tmpdir/bare.git" "$_tmpdir/$_dotdir"
+
+  # Pipe tar to remote, then run extraction script via separate SSH
+  (cd "$_tmpdir" && tar -cf - "$_dotdir" tree) | \
+    eval "ssh $EXTRA_ARGS \"\$_dest\" 'cd \$HOME && tar -xf -'" || {
+    rm -rf "$_tmpdir"
+    return 1
+  }
+
+  # Now run extraction/move script
+  _extract_script="set -e
+dotdir='$_dotdir'
+tree=\"$_remote_tree\"
+id='$_id'
+echo \"[\$id] Setting up \$tree from extracted files\"
+# Move worktree files to tree location
+if [ \"\$tree\" != \"\$HOME\" ]; then
+  mkdir -p \"\$tree\"
+  cp -a \"\$HOME/tree/.\" \"\$tree/\" 2>/dev/null || true
+  rm -rf \"\$HOME/tree\"
+else
+  # tree/ contents go to \$HOME, check for conflicts
+  backupdir=\"\$HOME/\${dotdir}-backup-\${id}-\$(date +%s)\"
+  backed_up=0
+  cd \"\$HOME/tree\"
+  for f in \$(ls -A); do
+    if [ -e \"\$HOME/\$f\" ] && [ \"\$f\" != \"\$dotdir\" ]; then
+      mkdir -p \"\$backupdir\"
+      mv \"\$HOME/\$f\" \"\$backupdir/\" 2>/dev/null && { echo \"  Backed up: \$f\"; backed_up=1; } || true
+    fi
+  done
+  cd \"\$HOME\"
+  cp -a tree/. \"\$HOME/\" 2>/dev/null || true
+  rm -rf \"\$HOME/tree\"
+  [ \"\$backed_up\" = 1 ] && echo \"  Backups in: \$backupdir\"
+fi"
+
+  # Add run command if specified
+  [ -n "$_run" ] && _extract_script="$_extract_script
+echo \"  Running: $_run\"
+cd \"\$tree\"
+$_run"
+
+  eval "ssh $EXTRA_ARGS \"\$_dest\" 'sh'" <<EOF
+$_extract_script
+EOF
+
+  _ret=$?
+  rm -rf "$_tmpdir"
+  trap - EXIT
+  return $_ret
 }
 
 # Execute deployments
@@ -172,16 +256,27 @@ for dest_var in $batch_list; do
     done
     continue
   fi
-  # Build payload
-  depth_val="--depth 1"; [ "$FULL" -eq 1 ] && depth_val=""
-  payload=$(remote_script | sed "s/DEPTH_PLACEHOLDER/$depth_val/")
-  for j in $batch_jobs; do
-    payload="$payload
+
+  # Check if remote has git
+  has_git=$(remote_has_git "$dest")
+
+  if [ "$has_git" = "1" ]; then
+    # Remote has git - use normal method
+    depth_val="--depth 1"; [ "$FULL" -eq 1 ] && depth_val=""
+    payload=$(remote_script | sed "s/DEPTH_PLACEHOLDER/$depth_val/")
+    for j in $batch_jobs; do
+      payload="$payload
 deploy $(quote "$j") $(quote "$(get "$j" REPO_URL)") $(quote "$(get "$j" BRANCH)") $(quote "$(get "$j" DIR)") $(quote "$(get "$j" TREE)") $(quote "$(get "$j" RUN)")"
-  done
-  # Execute via SSH (eval for EXTRA_ARGS expansion)
-  eval "printf '%s\n' \"\$payload\" | ssh -o ForwardAgent=yes $EXTRA_ARGS \"\$dest\" sh" &
-  pids="$pids $!"
+    done
+    eval "printf '%s\n' \"\$payload\" | ssh -o ForwardAgent=yes $EXTRA_ARGS \"\$dest\" sh" &
+    pids="$pids $!"
+  else
+    # Remote has NO git - use bootstrap method (sequential, not parallel)
+    printf '\033[33m[%s] git not found, using bootstrap mode\033[0m\n' "$dest"
+    for j in $batch_jobs; do
+      deploy_nogit "$dest" "$j" "$(get "$j" REPO_URL)" "$(get "$j" BRANCH)" "$(get "$j" DIR)" "$(get "$j" TREE)" "$(get "$j" RUN)" || ret=1
+    done
+  fi
 done
 
 # Wait for all jobs
