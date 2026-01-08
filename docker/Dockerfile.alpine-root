@@ -3,8 +3,8 @@
 FROM alpine:latest
 
 RUN apk add --no-cache \
-    openssh bash curl sudo less ripgrep \
-    git neovim
+    openssh bash curl sudo less \
+    git ripgrep neovim
 
 RUN ssh-keygen -A && \
     sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \

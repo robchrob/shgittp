@@ -1,3 +1,8 @@
+v0.4.15
+    - Nicer README
+    - -c / --config custom configuration file flag
+    - --dotfiles -> --dir
+
 v0.4.14
     - Git bootstrapping: deploy to hosts without git installed
       - Auto-detects git availability on remote

@@ -30,10 +30,10 @@ run:
 	@./docker/manage.sh alpine-basic restart && make reinstall && shgittp -A -i -r git@github.com:robchrob/dotfiles-bare.git -b minimal -x "bash .config/setup.sh" dev@devbox
 
 runroot:
-	@./docker/manage.sh alpine-root restart && make reinstall && time shgittp -A endpoint
+	@./docker/manage.sh alpine-root restart && make reinstall && shgittp -c shgittp.conf endpoint
 
 runnogit:
-	@PORT=2223 ./docker/manage.sh alpine-nogit restart && make reinstall && shgittp -A -i -r git@github.com:robchrob/dotfiles-bare.git -b minimal dev@devbox-nogit
+	@PORT=2223 ./docker/manage.sh alpine-nogit restart && make reinstall && time shgittp dev@devbox-nogit
 
 uninstall: clean
 	@echo "Uninstall complete."

@@ -1,173 +1,187 @@
 #!/bin/sh
-# shgittp-sh - Minimal SSH dotfiles bootstrap (POSIX version)
+
 set -eu
 
-VER="0.4.14"
-die() { printf '\033[31m!! %s\033[0m\n' "$*" >&2; exit 1; }
-usage() { printf 'shgittp v%s\n\t[-r URL] [-b BRANCH] [-w DIR] [-d DIR] [-x CMD] [-i] [--dry-run] [--full-clone] [user@]host\n' "$VER"; exit 0; }
+VER="0.4.15"
 
-# Shell-safe quoting (POSIX alternative to printf %q)
+die() { printf '\033[31m!! %s\033[0m\n' "$*" >&2; exit 1; }
+usage() { printf 'shgittp v%s\n\t[-c FILE] [-r URL] [-b BRANCH] [-w DIR] [-d DIR] [-x CMD] [-i] [--dry-run] [--full-clone] [user@]host\n' "$VER"; exit 0; }
+
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
-# Defaults
-def_REPO_URL="" def_BRANCH="main" def_DIR=".dotfiles" def_TREE="" def_RUN="" def_USER=""
-CFG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
-TARGET="" INTERACTIVE=0 DRY=0 FULL=0
+# Configuration Defaults
+CLI_REPO_URL="" CLI_BRANCH="" CLI_DIR="" CLI_TREE="" CLI_RUN=""
+DEFAULT_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
+CFG_FILE="$DEFAULT_CFG"
+CUSTOM_CFG=0
+TARGET="" INTERACTIVE=0 DRY_RUN=0
 EXTRA_ARGS=""
 
-# CLI arg parsing
-cli_REPO_URL="" cli_BRANCH="" cli_DIR="" cli_TREE="" cli_RUN=""
+# Parse command line
 while [ $# -gt 0 ]; do
   case "$1" in
-    -r|--repo)     cli_REPO_URL="$2"; shift 2 ;;
-    -b|--branch)   cli_BRANCH="$2"; shift 2 ;;
-    -d|--dotfiles) cli_DIR="$2"; shift 2 ;;
-    -w|--work)     cli_TREE="$2"; shift 2 ;;
-    -x|--run)      cli_RUN="$2"; shift 2 ;;
+    -c|--config)   CFG_FILE="$2"; CUSTOM_CFG=1; shift 2 ;;
+    -r|--repo)     CLI_REPO_URL="$2"; shift 2 ;;
+    -b|--branch)   CLI_BRANCH="$2"; shift 2 ;;
+    -d|--dotfiles) CLI_DIR="$2"; shift 2 ;;
+    -w|--work)     CLI_TREE="$2"; shift 2 ;;
+    -x|--run)      CLI_RUN="$2"; shift 2 ;;
     -i)            INTERACTIVE=1; shift ;;
-    --dry-run)     DRY=1; shift ;;
-    --full-clone)  FULL=1; shift ;;
+    --dry-run)     DRY_RUN=1; shift ;;
     -v|--version)  printf 'v%s\n' "$VER"; exit 0 ;;
     -h|--help)     usage ;;
     --)            shift; for a in "$@"; do EXTRA_ARGS="$EXTRA_ARGS $(quote "$a")"; done; break ;;
-    -*)            EXTRA_ARGS="$EXTRA_ARGS $(quote "$1")"; shift ;;
-    *)             TARGET="$1"; shift ;;
+    -*)            die "Unknown option: $1" ;;
+    *)             TARGET="$1"; shift; break ;;
   esac
 done
-[ -n "$TARGET" ] || usage
+
+[ -z "$TARGET" ] && usage
+
+# Validate config file existence if explicitly passed
+if [ "$CUSTOM_CFG" -eq 1 ] && [ ! -f "$CFG_FILE" ]; then
+  die "Configuration file not found: $CFG_FILE"
+fi
 
 # Parse INI config
 HOST="${TARGET##*@}"
-in_host_section=0  # Track if we're in a matching non-default section
+IN_HOST_SECTION=0
 if [ -f "$CFG_FILE" ]; then
-  section="" current_suf=""
+  SECTION="" SUFFIX=""
   while IFS='=' read -r k v || [ -n "$k" ]; do
-    # Skip comments and empty lines
-    case "$k" in ''|'#'*|' #'*) continue;; esac
-    # Trim leading/trailing whitespace from key
+    case "$k" in ''|'#'*) continue;; esac
     k="${k#"${k%%[! ]*}"}"; k="${k%"${k##*[! ]}"}"
-    # Section header
+
     case "$k" in
-      \[*\])
-        section="${k#\[}"; section="${section%\]}"
-        case "$section" in
-          default) current_suf="default"; in_host_section=0 ;;
-          "$HOST"|"$TARGET") current_suf="default"; in_host_section=1 ;;
-          *) current_suf=""; in_host_section=0 ;;
+      '['*']')
+        SECTION="${k#'['}"; SECTION="${SECTION%']'}"
+        case "$SECTION" in
+          default) SUFFIX="default"; IN_HOST_SECTION=0 ;;
+          "$HOST"|"$TARGET") SUFFIX="default"; IN_HOST_SECTION=1 ;;
+          *) SUFFIX=""; IN_HOST_SECTION=0 ;;
         esac
         continue ;;
     esac
-    [ -z "$current_suf" ] && continue
-    # Trim whitespace from value, strip quotes
+
+    [ -z "$SUFFIX" ] && continue
+
     v="${v#"${v%%[! ]*}"}"; v="${v%"${v##*[! ]}"}"
     v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
-    # Parse key_suffix pattern (e.g., repo_root -> key=repo, suf=root)
-    suf="default" base="$k"
+
+    # Parse key_suffix pattern
+    SUF="default" BASE="$k"
     case "$k" in
       *_*)
-        # Extract potential suffix (last _xxx part)
-        tmp="${k%_*}"
-        case "$tmp" in
+        STEM="${k%_*}"
+        case "$STEM" in
           repo|branch|dir|tree|run|user|REPO_URL|BRANCH|DIR|TREE|RUN|USER)
-            base="$tmp"
-            suf="${k##*_}"
-            # Lowercase the suffix
-            suf=$(printf '%s' "$suf" | tr '[:upper:]' '[:lower:]')
+            BASE="$STEM"
+            SUF="${k##*_}"
+            SUF=$(printf '%s' "$SUF" | tr '[:upper:]' '[:lower:]')
             ;;
         esac ;;
     esac
-    # Map short names to canonical keys
-    case "$base" in
-      repo)   key=REPO_URL ;; branch) key=BRANCH ;; dir) key=DIR ;;
-      tree)   key=TREE ;;     run)    key=RUN ;;    user) key=USER ;;
-      REPO_URL|BRANCH|DIR|TREE|RUN|USER) key="$base" ;;
+
+    case "$BASE" in
+      repo)   KEY=REPO_URL ;;
+      branch) KEY=BRANCH ;;
+      dir)    KEY=DIR ;;
+      tree)   KEY=TREE ;;
+      run)    KEY=RUN ;;
+      user)   KEY=USER ;;
+      REPO_URL|BRANCH|DIR|TREE|RUN|USER) KEY="$BASE" ;;
       *) continue ;;
     esac
-    eval "cfg_${suf}_${key}=\$v"
-    # Register job when in matching host section (mimics original: SECTION != "default")
-    [ "$in_host_section" -eq 1 ] && eval "job_${suf}=1"
+
+    eval "CFG_${SUF}_${KEY}=\$v"
+    [ "$IN_HOST_SECTION" -eq 1 ] && eval "JOB_${SUF}=1"
   done < "$CFG_FILE"
 fi
 
-# CLI overrides -> default config
-[ -n "$cli_REPO_URL" ] && { cfg_default_REPO_URL="$cli_REPO_URL"; job_default=1; }
-[ -n "$cli_BRANCH" ]   && cfg_default_BRANCH="$cli_BRANCH"
-[ -n "$cli_DIR" ]      && cfg_default_DIR="$cli_DIR"
-[ -n "$cli_TREE" ]     && cfg_default_TREE="$cli_TREE"
-[ -n "$cli_RUN" ]      && cfg_default_RUN="$cli_RUN"
+# Apply CLI overrides to default job
+[ -n "$CLI_REPO_URL" ] && { CFG_default_REPO_URL="$CLI_REPO_URL"; JOB_default=1; }
+[ -n "$CLI_BRANCH" ]   && CFG_default_BRANCH="$CLI_BRANCH"
+[ -n "$CLI_DIR" ]      && CFG_default_DIR="$CLI_DIR"
+[ -n "$CLI_TREE" ]     && CFG_default_TREE="$CLI_TREE"
+[ -n "$CLI_RUN" ]      && CFG_default_RUN="$CLI_RUN"
 
-# Getter with fallback: job -> default -> hardcoded default
+# Get configuration value with fallback chain: job -> default -> hardcoded
 get() {
-  _suf=$1 _key=$2
-  eval "_val=\${cfg_${_suf}_${_key}-}"
-  [ -n "$_val" ] || eval "_val=\${cfg_default_${_key}-}"
-  [ -n "$_val" ] || eval "_val=\${def_${_key}-}"
+  _suf="$1" _key="$2"
+  eval "_val=\${CFG_${_suf}_${_key}-}"
+  [ -n "$_val" ] || eval "_val=\${CFG_default_${_key}-}"
+  case "$_key" in
+    REPO_URL) [ -n "$_val" ] || _val="" ;;
+    BRANCH)   [ -n "$_val" ] || _val="main" ;;
+    DIR)      [ -n "$_val" ] || _val=".dotfiles" ;;
+  esac
   printf '%s' "$_val"
 }
 
-# Collect jobs (sorted)
-jobs=$(set | grep '^job_' | cut -d_ -f2 | cut -d= -f1 | sort -V 2>/dev/null || sort)
-[ -z "$jobs" ] && die "No configuration found for '$TARGET'"
+# Collect all job suffixes
+JOBS=$(set | sed -n 's/^JOB_\([^=]*\)=.*$/\1/p' | sort -V 2>/dev/null || sort)
+[ -z "$JOBS" ] && die "No configuration found for '$TARGET' (and no CLI repo provided)"
 
-# Group jobs into batches by connection string
-# Sanitize var names (replace @ and - with _)
-batch_list=""
-for j in $jobs; do
-  u=$(get "$j" USER)
-  : "${u:=${TARGET%%@*}}"
-  [ "$u" = "$TARGET" ] && u=""
-  conn="${u:+$u@}$HOST"
-  conn_var=$(printf '%s' "$conn" | tr '@-' '__')
-  eval "batch_${conn_var}=\"\${batch_${conn_var}-}$j \""
-  eval "conn_${conn_var}=\"\$conn\""
-  case " $batch_list " in
-    *" $conn_var "*) ;;  # already in list
-    *) batch_list="$batch_list $conn_var" ;;
+# Group jobs by connection string (user@host)
+BATCH_LIST=""
+for J in $JOBS; do
+  U=$(get "$J" USER)
+  : "${U:=${TARGET%%@*}}"  # Default to target username
+  [ "$U" = "$TARGET" ] && U=""  # Handle case where TARGET has no @
+
+  CONN="${U:+$U@}$HOST"
+  CONN_VAR=$(printf '%s' "$CONN" | tr '@-' '__')  # Sanitize for variable name
+
+  eval "BATCH_${CONN_VAR}=\"\${BATCH_${CONN_VAR}-}$J \""
+  eval "CONN_${CONN_VAR}=\"\$CONN\""
+
+  case " $BATCH_LIST " in
+    *" $CONN_VAR "*) ;;  # Already in list
+    *) BATCH_LIST="$BATCH_LIST $CONN_VAR" ;;
   esac
 done
 
-# Generate remote deploy script (when git is available)
+# Generate remote deployment script
 remote_script() {
-  cat <<'REMOTE'
+  _depth="$1"
+  cat <<REMOTE
 set -e
 export GIT_SSH_COMMAND='ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
 deploy() {
-  id="$1" url="$2" branch="$3" dotdir="$4" tree="${5:-$HOME}" run="$6"
-  gitdir="$HOME/$dotdir"
-  echo "[$id] $url ($branch) -> $gitdir"
-  mkdir -p "$tree"
-  if [ -f "$gitdir/config" ]; then
-    git --git-dir="$gitdir" fetch -q origin "$branch"
+  _id="\$1" _url="\$2" _branch="\$3" _dotdir="\$4" _tree="\${5:-\$HOME}" _run="\$6"
+  _gitdir="\$HOME/\$_dotdir"
+  echo "[\$_id] \$_url (\$_branch) -> \$_gitdir"
+  mkdir -p "\$_tree"
+  if [ -f "\$_gitdir/config" ]; then
+    git --git-dir="\$_gitdir" fetch -q origin "\$_branch"
   else
-    git clone -q --bare -b "$branch" DEPTH_PLACEHOLDER "$url" "$gitdir"
+    git clone -q --bare -b "\$_branch" $_depth "\$_url" "\$_gitdir"
   fi
-  git --git-dir="$gitdir" config status.showUntrackedFiles no
-  if ! git --git-dir="$gitdir" --work-tree="$tree" checkout -q "$branch" 2>/dev/null; then
-    backupdir="$HOME/${dotdir}-backup-${id}-$(date +%s)"
-    echo "  Conflict detected, backing up to $backupdir"
-    git --git-dir="$gitdir" --work-tree="$tree" ls-tree -rz --name-only "$branch" | \
-      xargs -0 -I{} sh -c '[ -e "'"$tree"'/{}" ] && { mkdir -p "'"$backupdir"'/$(dirname "{}")"; mv "'"$tree"'/{}" "'"$backupdir"'/{}"; } || true'
-    git --git-dir="$gitdir" --work-tree="$tree" checkout -fq "$branch"
+  git --git-dir="\$_gitdir" config status.showUntrackedFiles no
+  if ! git --git-dir="\$_gitdir" --work-tree="\$_tree" checkout -q "\$_branch" 2>/dev/null; then
+    _backupdir="\$HOME/\${_dotdir}-backup-\${_id}-\$(date +%s)"
+    echo "  Conflict detected, backing up to \$_backupdir"
+    git --git-dir="\$_gitdir" --work-tree="\$_tree" ls-tree -rz --name-only "\$_branch" | \\
+      xargs -0 -I{} sh -c '_f="{}"; if [ -e "'\"\$_tree\"'/\$_f" ]; then mkdir -p "'\"\$_backupdir\"'/\$(dirname "\$_f")"; mv "'\"\$_tree\"'/\$_f" "'\"\$_backupdir\"'/\$_f"; fi'
+    git --git-dir="\$_gitdir" --work-tree="\$_tree" checkout -fq "\$_branch"
   fi
-  [ -n "$run" ] && { echo "  Running: $run"; (cd "$tree" && eval "$run"); }
+  [ -n "\$_run" ] && { echo "  Running: \$_run"; (cd "\$_tree" && eval "\$_run"); }
 }
 REMOTE
 }
 
-# Check if remote has git
+# Check if remote host has git
 remote_has_git() {
   _dest="$1"
   eval "ssh $EXTRA_ARGS \"\$_dest\" 'command -v git >/dev/null 2>&1 && echo 1 || echo 0'" 2>/dev/null
 }
 
-# Deploy without git: clone locally, tar bare repo + worktree, pipe to remote
-# Sends both .git (bare) and worktree so git works if installed later
+# Deploy to host without git (bootstrap mode)
 deploy_nogit() {
   _dest="$1" _id="$2" _url="$3" _branch="$4" _dotdir="$5" _tree="$6" _run="$7"
-  _depth_arg="--depth 1"; [ "$FULL" -eq 1 ] && _depth_arg=""
+  _depth_arg="--depth 1"
   _remote_tree="${_tree:-\$HOME}"
 
-  # Create temp dir for local clone
   _tmpdir=$(mktemp -d)
   trap "rm -rf '$_tmpdir'" EXIT
 
@@ -184,123 +198,109 @@ deploy_nogit() {
   mkdir -p "$_tmpdir/tree"
   git --git-dir="$_tmpdir/bare.git" --work-tree="$_tmpdir/tree" checkout -q "$_branch"
   git --git-dir="$_tmpdir/bare.git" config status.showUntrackedFiles no
-
-  # Create tar: bare repo renamed to dotdir, worktree files go to tree dir
-  # Structure: $dotdir/ (bare repo), tree/ (worktree files)
   mv "$_tmpdir/bare.git" "$_tmpdir/$_dotdir"
 
-  # Pipe tar to remote, then run extraction script via separate SSH
+  # Transfer tarball and execute extraction in one step
   (cd "$_tmpdir" && tar -cf - "$_dotdir" tree) | \
-    eval "ssh $EXTRA_ARGS \"\$_dest\" 'cd \$HOME && tar -xf -'" || {
+    ssh $EXTRA_ARGS "$_dest" "
+set -e
+cd \$HOME
+echo '[$_id] Extracting files to remote'
+tar -xf - || { echo 'Extract failed'; exit 1; }
+
+echo '[$_id] Setting up worktree at $_remote_tree'
+
+if [ '$_remote_tree' != '\$HOME' ]; then
+  mkdir -p '$_remote_tree'
+  cp -a tree/. '$_remote_tree/' 2>/dev/null || true
+  rm -rf tree
+else
+  backupdir=\"\$HOME/${_dotdir}-backup-${_id}-\$(date +%s)\"
+  backed_up=0
+    for f in tree/.[!.]* tree/*; do
+    [ ! -e \"\$f\" ] && continue
+    fname=\$(basename \"\$f\")
+    [ \"\$fname\" = '$_dotdir' ] && continue
+    if [ -e \"\$HOME/\$fname\" ]; then
+      [ \"\$backed_up\" -eq 0 ] && mkdir -p \"\$backupdir\"
+      mv \"\$HOME/\$fname\" \"\$backupdir/\" 2>/dev/null && { echo '  Backed up: '\$fname; backed_up=1; } || true
+    fi
+  done
+  cp -a tree/. \$HOME/ 2>/dev/null || true
+  rm -rf tree
+  [ \"\$backed_up\" -eq 1 ] && echo '  Backups in: '\$backupdir
+fi
+
+echo '[$_id] Deployment complete'
+$([ -n "$_run" ] && printf "echo '  Running: %s'\ncd \"%s\"\n%s" "$_run" "$_remote_tree" "$_run")
+" || {
     rm -rf "$_tmpdir"
     return 1
   }
 
-  # Now run extraction/move script
-  _extract_script="set -e
-dotdir='$_dotdir'
-tree=\"$_remote_tree\"
-id='$_id'
-echo \"[\$id] Setting up \$tree from extracted files\"
-# Move worktree files to tree location
-if [ \"\$tree\" != \"\$HOME\" ]; then
-  mkdir -p \"\$tree\"
-  cp -a \"\$HOME/tree/.\" \"\$tree/\" 2>/dev/null || true
-  rm -rf \"\$HOME/tree\"
-else
-  # tree/ contents go to \$HOME, check for conflicts
-  backupdir=\"\$HOME/\${dotdir}-backup-\${id}-\$(date +%s)\"
-  backed_up=0
-  cd \"\$HOME/tree\"
-  for f in \$(ls -A); do
-    if [ -e \"\$HOME/\$f\" ] && [ \"\$f\" != \"\$dotdir\" ]; then
-      mkdir -p \"\$backupdir\"
-      mv \"\$HOME/\$f\" \"\$backupdir/\" 2>/dev/null && { echo \"  Backed up: \$f\"; backed_up=1; } || true
-    fi
-  done
-  cd \"\$HOME\"
-  cp -a tree/. \"\$HOME/\" 2>/dev/null || true
-  rm -rf \"\$HOME/tree\"
-  [ \"\$backed_up\" = 1 ] && echo \"  Backups in: \$backupdir\"
-fi"
-
-  # Add run command if specified
-  [ -n "$_run" ] && _extract_script="$_extract_script
-echo \"  Running: $_run\"
-cd \"\$tree\"
-$_run"
-
-  eval "ssh $EXTRA_ARGS \"\$_dest\" 'sh'" <<EOF
-$_extract_script
-EOF
-
-  _ret=$?
   rm -rf "$_tmpdir"
   trap - EXIT
-  return $_ret
+  return 0
 }
 
 # Execute deployments
-pids="" ret=0
-[ "$DRY" -eq 1 ] && printf 'Dry run mode\n'
+RET=0
+[ "$DRY_RUN" -eq 1 ] && printf '=== DRY RUN MODE ===\n'
 
-for dest_var in $batch_list; do
-  eval "batch_jobs=\"\${batch_${dest_var}-}\""
-  eval "dest=\"\${conn_${dest_var}}\""
-  if [ "$DRY" -eq 1 ]; then
-    printf 'Target: %s\n' "$dest"
-    for j in $batch_jobs; do
-      repo=$(get "$j" REPO_URL)
-      branch=$(get "$j" BRANCH)
-      printf '  - Job '\''%s'\'': %s (%s)\n' "$j" "$repo" "$branch"
+PIDS=""
+for DEST_VAR in $BATCH_LIST; do
+  eval "BATCH_JOBS=\"\${BATCH_${DEST_VAR}-}\""
+  eval "DEST=\"\${CONN_${DEST_VAR}}\""
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'Target: %s\n' "$DEST"
+    for J in $BATCH_JOBS; do
+      printf '  Job %s: %s (%s)\n' "$J" "$(get "$J" REPO_URL)" "$(get "$J" BRANCH)"
     done
     continue
   fi
 
-  # Check if remote has git
-  has_git=$(remote_has_git "$dest")
+  if [ "$(remote_has_git "$DEST")" = "1" ]; then
+    DEPTH_VAL="--depth 1"
 
-  if [ "$has_git" = "1" ]; then
-    # Remote has git - use normal method
-    depth_val="--depth 1"; [ "$FULL" -eq 1 ] && depth_val=""
-    payload=$(remote_script | sed "s/DEPTH_PLACEHOLDER/$depth_val/")
-    for j in $batch_jobs; do
-      payload="$payload
-deploy $(quote "$j") $(quote "$(get "$j" REPO_URL)") $(quote "$(get "$j" BRANCH)") $(quote "$(get "$j" DIR)") $(quote "$(get "$j" TREE)") $(quote "$(get "$j" RUN)")"
+    # Build and execute deployment script
+    SCRIPT=$(remote_script "$DEPTH_VAL")
+    for J in $BATCH_JOBS; do
+      SCRIPT="$SCRIPT
+deploy $(quote "$J") $(quote "$(get "$J" REPO_URL)") $(quote "$(get "$J" BRANCH)") $(quote "$(get "$J" DIR)") $(quote "$(get "$J" TREE)") $(quote "$(get "$J" RUN)")"
     done
-    eval "printf '%s\n' \"\$payload\" | ssh -o ForwardAgent=yes $EXTRA_ARGS \"\$dest\" sh" &
-    pids="$pids $!"
+
+    printf '%s\n' "$SCRIPT" | ssh -o ForwardAgent=yes $EXTRA_ARGS "$DEST" sh &
+    PIDS="$PIDS $!"
   else
-    # Remote has NO git - use bootstrap method (sequential, not parallel)
-    printf '\033[33m[%s] git not found, using bootstrap mode\033[0m\n' "$dest"
-    for j in $batch_jobs; do
-      deploy_nogit "$dest" "$j" "$(get "$j" REPO_URL)" "$(get "$j" BRANCH)" "$(get "$j" DIR)" "$(get "$j" TREE)" "$(get "$j" RUN)" || ret=1
+    printf '\033[33m[%s] git not found, using bootstrap mode\033[0m\n' "$DEST"
+    for J in $BATCH_JOBS; do
+      deploy_nogit "$DEST" "$J" "$(get "$J" REPO_URL)" "$(get "$J" BRANCH)" "$(get "$J" DIR)" "$(get "$J" TREE)" "$(get "$J" RUN)" || RET=1
     done
   fi
 done
 
-# Wait for all jobs
-for pid in $pids; do
-  wait "$pid" || ret=1
-done
+# Wait for parallel git deployments
+for PID in $PIDS; do wait "$PID" || RET=1; done
 
-# Print suggested aliases
-if [ "$ret" -eq 0 ] && [ -n "$jobs" ]; then
-  printf '\n'
-  for j in $jobs; do
-    dotdir=$(get "$j" DIR)
-    tree=$(get "$j" TREE)
-    [ -z "$tree" ] && tree="\$HOME"
-    alias_name="cfg"; [ "$j" != "default" ] && alias_name="cfg-$j"
-    printf '\033[32m  + alias %s='\''/usr/bin/git --git-dir=$HOME/%s --work-tree=%s'\''\033[0m\n' "$alias_name" "$dotdir" "$tree"
+# Print git aliases on success
+if [ "$RET" -eq 0 ] && [ -n "$JOBS" ]; then
+  printf '\nGit aliases for configured dotfiles:\n'
+  for J in $JOBS; do
+    DOTDIR=$(get "$J" DIR)
+    TREE=$(get "$J" TREE)
+    [ -z "$TREE" ] && TREE="\$HOME"
+    ALIAS="cfg"
+    [ "$J" != "default" ] && ALIAS="cfg-$J"
+    printf '  \033[32m+ alias %s='\''git --git-dir=$HOME/%s --work-tree=%s'\''\033[0m\n' "$ALIAS" "$DOTDIR" "$TREE"
   done
   printf '\n'
 fi
 
-# Interactive mode
-if [ "$INTERACTIVE" -eq 1 ] && [ "$ret" -eq 0 ]; then
+# Interactive shell if requested
+if [ "$INTERACTIVE" -eq 1 ] && [ "$RET" -eq 0 ]; then
   printf 'Connecting to %s...\n' "$TARGET"
-  eval "exec ssh -t -o ForwardAgent=yes $EXTRA_ARGS \"\$TARGET\""
+  exec ssh -t -o ForwardAgent=yes $EXTRA_ARGS "$TARGET"
 fi
 
-exit "$ret"
+exit "$RET"
