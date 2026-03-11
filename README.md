@@ -3,7 +3,7 @@ POSIX shell bootstrapper for bare-git dotfiles over SSH.
 Single `sh` file, zero remote dependencies.
 
 ```sh
-shgittp -r git@github.com:me/dots.git root@vps       # one-shot deploy
+shgittp -r git@github.com:me/dots.git root@vps        # one-shot deploy
 shgittp -i dev@devbox                                 # deploy + interactive shell
 shgittp --dry-run my-server                           # show plan, skip execution
 shgittp -x "./setup.sh" -b minimal user@alpine-box    # post-deploy hook
@@ -11,13 +11,14 @@ shgittp dev@endpoint -- -p 2222                       # extra SSH options
 ```
 
 ## Install
+Standalone:
 ```sh
 curl -fsSL \
   https://raw.githubusercontent.com/robchrob/shgittp/master/shgittp \
   -o ~/.local/bin/shgittp && chmod +x ~/.local/bin/shgittp
 ```
 
-Or with make:
+Dev / repository:
 ```sh
 git clone https://github.com/robchrob/shgittp.git
 cd shgittp && make install

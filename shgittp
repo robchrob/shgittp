@@ -236,7 +236,7 @@ REMOTE
   [ -n "$_run" ] && {
     echo "  Running: $_run"
     (cd "$_wt" && eval "$_run")
-  }
+  } || true
 }
 REMOTE
 }
