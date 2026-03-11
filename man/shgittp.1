@@ -1,0 +1,125 @@
+.TH SHGITTP 1 "2025" "shgittp v0.5.0" "User Commands"
+.SH NAME
+shgittp \- POSIX shell bootstrapper for bare-git dotfiles over SSH
+.SH SYNOPSIS
+.B shgittp
+.RI [ options ]
+.RI [ user@ ] host
+.RI [\-\- " ssh-opts" ]
+.SH DESCRIPTION
+.B shgittp
+deploys bare git repositories (typically dotfiles) to remote hosts via
+SSH. It automates the Atlassian "bare repository" pattern for dotfile
+management across machines.
+.PP
+If the remote host has
+.BR git (1),
+deployment is performed via agent-forwarded bare clone and checkout.
+If git is absent, shgittp clones locally and streams a tarball over SSH
+(bootstrap mode).
+.PP
+File conflicts are automatically detected and existing files are moved
+to timestamped backups before checkout.
+.SH OPTIONS
+.TP
+.BR \-r ", " \-\-repo " " \fIURL\fR
+Source repository URL.
+.TP
+.BR \-b ", " \-\-branch " " \fINAME\fR
+Branch to checkout (default: main).
+.TP
+.BR \-d ", " \-\-dir " " \fIDIR\fR
+Bare git-dir location relative to $HOME (default: .dotfiles).
+.TP
+.BR \-w ", " \-\-work " " \fIDIR\fR
+Work tree directory (default: $HOME).
+.TP
+.BR \-x ", " \-\-run " " \fICMD\fR
+Command to execute in work tree after deployment.
+.TP
+.BR \-c ", " \-\-config " " \fIFILE\fR
+Configuration file (default: $XDG_CONFIG_HOME/shgittp/config).
+.TP
+.B \-i
+Open interactive SSH session after successful deployment.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress non-essential output.
+.TP
+.B \-\-full\-clone
+Clone full git history instead of shallow (depth 1).
+.TP
+.B \-\-strict
+Enable SSH strict host-key checking for remote git operations.
+.TP
+.B \-\-dry\-run
+Print deployment plan without executing.
+.TP
+.BR \-v ", " \-\-version
+Print version and exit.
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.SH CONFIGURATION
+Configuration is read from
+.I $XDG_CONFIG_HOME/shgittp/config
+(typically ~/.config/shgittp/config). Format is standard INI.
+Sections match hostnames or user@host strings.
+.PP
+Suffixed keys (e.g., repo_nvim, dir_nvim) define additional
+deployment jobs on the same host. Jobs sharing a connection
+string are deployed in parallel.
+.PP
+.B Precedence:
+CLI flags > host section > [default] section > built-in values.
+.SH EXIT STATUS
+.TP
+.B 0
+All deployments succeeded.
+.TP
+.B 1
+One or more deployments failed, or invalid arguments.
+.SH EXAMPLES
+.TP
+.B shgittp -r git@github.com:me/dots.git root@vps
+Deploy to remote host with one-shot deployment.
+.TP
+.B shgittp -i dev@devbox
+Deploy using config and open interactive shell after.
+.TP
+.B shgittp --dry-run my-server
+Show deployment plan without executing.
+.TP
+.B shgittp -x "./setup.sh" -b minimal user@alpine-box
+Deploy from minimal branch with post-deploy hook.
+.TP
+.B shgittp dev@endpoint -- -p 2222
+Pass extra SSH options to remote connection.
+.SH DEPLOYMENT MODES
+.TP
+.B Git mode
+Remote has git: agent-forwarded bare clone + checkout directly on
+target. Updates via fetch on subsequent runs.
+.TP
+.B Bootstrap mode
+Remote lacks git: clone locally, pack into tarball, stream via SSH.
+Once git is installed remotely, subsequent runs use git mode
+automatically.
+.PP
+Both modes detect file conflicts and move existing files to timestamped
+backups before checkout.
+.SH DEPENDENCIES
+.TP
+.B Local
+sh, ssh, git, tar
+.TP
+.B Remote
+sh, ssh, tar (git optional)
+.SH CONTRIBUTING
+Contributions welcome at https://github.com/robchrob/shgittp
+.SH LICENSE
+MIT License
+.SH SEE ALSO
+.BR git (1),
+.BR ssh (1),
+.BR tar (1)

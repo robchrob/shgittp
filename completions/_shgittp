@@ -1,0 +1,26 @@
+#compdef shgittp
+
+_shgittp() {
+  local -a opts
+  opts=(
+    '(-r --repo)'{-r,--repo}'[Repository URL]:URL:'
+    '(-b --branch)'{-b,--branch}'[Branch name]:branch:(main master develop)'
+    '(-d --dir)'{-d,--dir}'[Bare git-dir relative to $HOME]:directory:'
+    '(-w --work)'{-w,--work}'[Work tree directory]:directory:'
+    '(-x --run)'{-x,--run}'[Post-deploy command]:command:'
+    '(-c --config)'{-c,--config}'[Config file path]:file:_files'
+    '-i[Interactive SSH session after deploy]'
+    '(-q --quiet)'{-q,--quiet}'[Suppress non-essential output]'
+    '--full-clone[Clone full git history instead of shallow]'
+    '--strict[Enable SSH strict host-key checking]'
+    '--dry-run[Show deployment plan without executing]'
+    '(-v --version)'{-v,--version}'[Show version]'
+    '(-h --help)'{-h,--help}'[Show help]'
+    '::host:_hosts'
+    '*:: :_normal'
+  )
+
+  _arguments -s -S "$opts[@]"
+}
+
+_shgittp
