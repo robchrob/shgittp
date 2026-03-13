@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.6.1
+- **BREAKING**: Replace suffix keys (`repo_nvim`, `dir_nvim`) with `[host:job]` subsections
+- Config format: `[host]` → primary job, `[host:job]` → named job subsections  
+- Keys are now lowercase throughout: `repo`, `branch`, `dir`, `tree`, `user`, `run`, `backup`
+- Job names are normalized to lowercase and sanitized (alphanumeric + underscore only)
+- Old suffix keys are silently ignored for backward compatibility
+- Cleaner config parsing with explicit key validation
+- Updated test suite with comprehensive job subsection coverage
+
 ## v0.5.0
 - Color output with terminal detection
 - `--full-clone`: opt into full git history (default: `--depth 1`)

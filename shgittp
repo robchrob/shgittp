@@ -3,7 +3,7 @@
 # https://github.com/robchrob/shgittp
 set -eu
 
-VER="0.5.0"
+VER="0.6.1"  # Release with [host:job] subsection format
 
 # ── Output ───────────────────────────────────────
 _R='' _G='' _Y='' _B='' _0=''
