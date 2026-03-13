@@ -97,20 +97,20 @@ assert_exit() {
 }
 assert_remote_exists() {
     # assert_remote_exists PORT PATH
-    ssh_remote "$1" "test -e $(printf '%q' "$2")" 2>/dev/null && return 0
+    ssh_remote "$1" "test -e $2" 2>/dev/null && return 0
     _failed=true; FAILURES+=("$_name: remote path missing: $2")
 }
 assert_remote_not_exists() {
-    ssh_remote "$1" "test ! -e $(printf '%q' "$2")" 2>/dev/null && return 0
+    ssh_remote "$1" "test ! -e $2" 2>/dev/null && return 0
     _failed=true; FAILURES+=("$_name: remote path unexpectedly exists: $2")
 }
 assert_remote_contains() {
     # assert_remote_contains PORT FILE NEEDLE
-    ssh_remote "$1" "grep -q $(printf '%q' "$3") $(printf '%q' "$2")" 2>/dev/null && return 0
+    ssh_remote "$1" "grep -q $3 $2" 2>/dev/null && return 0
     _failed=true; FAILURES+=("$_name: $2 missing '$3' on remote")
 }
 assert_remote_root_exists() {
-    ssh_remote_root "$1" "test -e $(printf '%q' "$2")" 2>/dev/null && return 0
+    ssh_remote_root "$1" "test -e $2" 2>/dev/null && return 0
     _failed=true; FAILURES+=("$_name: remote root path missing: $2")
 }
 assert_stderr_contains() {
@@ -175,6 +175,17 @@ create_source_repo() {
     ) 2>/dev/null
 }
 
+# Convert host path to container-accessible path (for git mode - runs in container)
+container_repo_path() {
+    local host_path="$1"
+    echo "$host_path" | sed 's|^/tmp/|/host/tmp/|'
+}
+
+# Host path (for bootstrap mode - runs on host)
+host_repo_path() {
+    echo "$1"
+}
+
 run_shgittp() {
     local out err; out=$(mktemp); err=$(mktemp); _exit=0
     "$SHGITTP" "$@" >"$out" 2>"$err" || _exit=$?
@@ -191,9 +202,9 @@ test_git_clean_deploy() {
 
     local cfg="$WORK_DIR/cfg_git_clean.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\n' \
-        "$REPO_URL" > "$cfg"
+        "$(container_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_BASIC dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_BASIC
     assert_exit 0
 
     assert_remote_exists  $PORT_BASIC '$HOME/.bashrc'
@@ -210,9 +221,9 @@ test_git_idempotent_redeploy() {
 
     local cfg="$WORK_DIR/cfg_git_idem.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\n' \
-        "$REPO_URL" > "$cfg"
+        "$(container_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_BASIC dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_BASIC
     assert_exit 0
     assert_remote_contains $PORT_BASIC '$HOME/.bashrc' 'mycmd'
     end
@@ -227,9 +238,9 @@ test_git_backup_on_conflict() {
 
     local cfg="$WORK_DIR/cfg_git_conflict.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\n' \
-        "$REPO_URL" > "$cfg"
+        "$(container_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_BASIC dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_BASIC
     assert_exit 0
 
     # New content deployed
@@ -250,9 +261,9 @@ test_git_run_command_executes() {
 
     local cfg="$WORK_DIR/cfg_git_run.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\nrun = sh setup.sh\n' \
-        "$REPO_URL" > "$cfg"
+        "$(container_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_BASIC dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_BASIC
     assert_exit 0
 
     assert_remote_exists $PORT_BASIC '$HOME/.run_marker'
@@ -266,9 +277,9 @@ test_git_custom_work_tree() {
 
     local cfg="$WORK_DIR/cfg_git_tree.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles-tree\ntree = custom-tree\n' \
-        "$REPO_URL" > "$cfg"
+        "$(container_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_BASIC dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_BASIC
     assert_exit 0
 
     assert_remote_exists $PORT_BASIC '$HOME/custom-tree/.bashrc'
@@ -296,16 +307,16 @@ test_git_multi_repo_single_connection() {
     local cfg="$WORK_DIR/cfg_git_multi.ini"
     cat > "$cfg" <<EOF
 [localhost]
-repo   = $REPO_URL
+repo   = $(container_repo_path "$REPO_URL")
 dir    = .dotfiles
 branch = main
 
-repo_tmux   = $repo2
+repo_tmux   = $(container_repo_path "$repo2")
 dir_tmux    = .dotfiles-tmux
 branch_tmux = main
 EOF
 
-    run_shgittp -c "$cfg" -- -p $PORT_BASIC dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_BASIC
     assert_exit 0
 
     assert_remote_exists  $PORT_BASIC '$HOME/.bashrc'
@@ -324,9 +335,9 @@ test_bootstrap_clean_deploy() {
 
     local cfg="$WORK_DIR/cfg_boot_clean.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\n' \
-        "$REPO_URL" > "$cfg"
+        "$(host_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_NOGIT dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_NOGIT
     assert_exit 0
 
     assert_remote_exists  $PORT_NOGIT '$HOME/.bashrc'
@@ -344,9 +355,9 @@ test_bootstrap_backup_on_conflict() {
 
     local cfg="$WORK_DIR/cfg_boot_conflict.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\n' \
-        "$REPO_URL" > "$cfg"
+        "$(host_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_NOGIT dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_NOGIT
     assert_exit 0
 
     assert_remote_contains $PORT_NOGIT '$HOME/.bashrc' 'mycmd'
@@ -365,9 +376,9 @@ test_bootstrap_run_command_executes() {
 
     local cfg="$WORK_DIR/cfg_boot_run.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\nrun = sh setup.sh\n' \
-        "$REPO_URL" > "$cfg"
+        "$(host_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_NOGIT dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_NOGIT
     assert_exit 0
 
     assert_remote_exists $PORT_NOGIT '$HOME/.run_marker'
@@ -381,9 +392,9 @@ test_bootstrap_custom_work_tree() {
 
     local cfg="$WORK_DIR/cfg_boot_tree.ini"
     printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles-bt\ntree = my-tree\n' \
-        "$REPO_URL" > "$cfg"
+        "$(host_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_NOGIT dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_NOGIT
     assert_exit 0
 
     assert_remote_exists  $PORT_NOGIT '$HOME/my-tree/.bashrc'
@@ -396,9 +407,9 @@ test_bootstrap_stderr_mode_flag() {
     wipe_remote_home $PORT_NOGIT
 
     local cfg="$WORK_DIR/cfg_boot_flag.ini"
-    printf '[localhost]\nrepo = %s\nbranch = main\n' "$REPO_URL" > "$cfg"
+    printf '[localhost]\nrepo = %s\nbranch = main\n' "$(host_repo_path "$REPO_URL")" > "$cfg"
 
-    run_shgittp -c "$cfg" -- -p $PORT_NOGIT dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_NOGIT
     assert_exit 0
     assert_stderr_contains "$_stderr" "bootstrap"
     end
@@ -416,30 +427,31 @@ test_multiuser_dev_and_root() {
     local cfg="$WORK_DIR/cfg_mu.ini"
     cat > "$cfg" <<EOF
 [localhost]
-repo   = $REPO_URL
+repo   = $(container_repo_path "$REPO_URL")
 branch = main
 dir    = .dotfiles
 
-repo_root   = $REPO_URL
-branch_root = main
-dir_root    = .dotfiles
-user_root   = root
+[localhost:root]
+repo   = $(container_repo_path "$REPO_URL")
+branch = main
+dir    = .dotfiles
+user   = root
 EOF
 
-    run_shgittp -c "$cfg" -- -p $PORT_ROOT dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_ROOT
     assert_exit 0
 
     assert_remote_exists      $PORT_ROOT '$HOME/.bashrc'
     assert_remote_root_exists $PORT_ROOT '/root/.bashrc'
     assert_remote_contains    $PORT_ROOT '$HOME/.bashrc' 'mycmd'
-    assert_remote_contains    $PORT_ROOT '/root/.bashrc' 'mycmd'  # root uses ssh_remote_root
+    assert_root_file_contains $PORT_ROOT '/root/.bashrc' 'mycmd'
     end
 }
 
 # assert_remote_contains uses dev@localhost; use a dedicated check for root
 assert_root_file_contains() {
     local port="$1" file="$2" needle="$3"
-    ssh_remote_root "$port" "grep -q $(printf '%q' "$needle") $(printf '%q' "$file")" 2>/dev/null && return 0
+    ssh_remote_root "$port" "grep -q $needle $file" 2>/dev/null && return 0
     _failed=true; FAILURES+=("$_name: root $file missing '$needle'")
 }
 
@@ -451,17 +463,18 @@ test_multiuser_separate_dirs() {
     local cfg="$WORK_DIR/cfg_mu_dirs.ini"
     cat > "$cfg" <<EOF
 [localhost]
-repo   = $REPO_URL
+repo   = $(container_repo_path "$REPO_URL")
 branch = main
 dir    = .dev-dots
 
-repo_root   = $REPO_URL
-branch_root = main
-dir_root    = .root-dots
-user_root   = root
+[localhost:root]
+repo   = $(container_repo_path "$REPO_URL")
+branch = main
+dir    = .root-dots
+user   = root
 EOF
 
-    run_shgittp -c "$cfg" -- -p $PORT_ROOT dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p $PORT_ROOT
     assert_exit 0
 
     assert_remote_exists      $PORT_ROOT '$HOME/.dev-dots'
@@ -478,10 +491,10 @@ EOF
 test_bad_port_fails() {
     begin "connection failure: unreachable host returns exit 1"
     local cfg="$WORK_DIR/cfg_badport.ini"
-    printf '[localhost]\nrepo = %s\nbranch = main\n' "$REPO_URL" > "$cfg"
+    printf '[localhost]\nrepo = %s\nbranch = main\n' "$(container_repo_path "$REPO_URL")" > "$cfg"
 
     # Port 19999 should not have anything listening
-    run_shgittp -c "$cfg" -- -p 19999 -o ConnectTimeout=2 dev@localhost
+    run_shgittp -c "$cfg" dev@localhost -- -p 19999 -o ConnectTimeout=2
     assert_exit 1
     end
 }
@@ -507,7 +520,8 @@ main() {
         exit 1
     fi
 
-    WORK_DIR=$(mktemp -d)
+    WORK_DIR="/tmp/shgittp_test_$(date +%s)"
+    mkdir -p "$WORK_DIR"
     REPO_URL="$WORK_DIR/source_repo"
     create_source_repo "$REPO_URL"
 
@@ -525,6 +539,9 @@ main() {
         printf '%sFailed to start alpine-nogit%s\n' "$RED" "$NC" >&2; exit 1; }
     start_container alpine-root  $PORT_ROOT  || {
         printf '%sFailed to start alpine-root%s\n'  "$RED" "$NC" >&2; exit 1; }
+
+    # Fix git ownership issue for root user (needed for multi-user tests)
+    ssh_remote_root $PORT_ROOT "git config --global --add safe.directory '*'" 2>/dev/null || true
 
     # ── Test sections ─────────────────────────────────────────────────
     section "Git Mode  (alpine-basic :$PORT_BASIC)"

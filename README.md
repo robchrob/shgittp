@@ -83,8 +83,8 @@ Use `[host:job]` subsections to define additional repos on the same host.
 Jobs deploy in parallel per connection.
 
 ```ini
-# Main dotfiles → $HOME
 [workstation]
+# Main dotfiles → $HOME
 repo = git@github.com:user/dotfiles.git
 dir = .cfg
 
@@ -102,18 +102,19 @@ tree = .local/bin
 ```
 
 ### Mixed users
-Deploy to multiple users on the same host by overriding `user_suffix`:
+Deploy to multiple users on the same host using `[host:job]` subsections:
 
 ```ini
 [endpoint]
 repo = git@github.com:user/dotfiles.git
 user = dev
+dir = .dotfiles
 
-repo_root = git@github.com:user/dotfiles.git
-branch_root = minimal-root
-dir_root = .cfg
-tree_root = /root
-user_root = root
+[endpoint:root]
+repo = git@github.com:user/dotfiles.git
+user = root
+dir = .dotfiles
+tree = /root
 ```
 
 ## Deployment Modes

@@ -3,7 +3,7 @@
 # https://github.com/robchrob/shgittp
 set -eu
 
-VER="0.6.1"  # Release with [host:job] subsection format
+VER="0.6.2"  # Fix: apply StrictHostKeyChecking to all SSH invocations
 
 # ── Output ───────────────────────────────────────
 _R='' _G='' _Y='' _B='' _0=''
@@ -32,12 +32,12 @@ quote() {
 
 usage() {
   cat >&2 <<EOF
-${_B}shgittp${_0} v${VER}
+ ${_B}shgittp${_0} v${VER}
 POSIX shell bootstrapper for bare-git dotfiles over SSH.
 
-${_B}Usage:${_0}  shgittp [options] [user@]host [-- ssh-opts]
+ ${_B}Usage:${_0}  shgittp [options] [user@]host [-- ssh-opts]
 
-${_B}Options:${_0}
+ ${_B}Options:${_0}
   -r, --repo URL       Repository URL
   -b, --branch NAME    Branch (default: main)
   -d, --dir DIR        Bare git-dir relative to \$HOME
@@ -96,8 +96,11 @@ done
 # ── Derived ──────────────────────────────────────
 SSH_OPTS="-o ForwardAgent=yes"
 GIT_SSH_CMD="ssh"
-[ "$STRICT" -eq 0 ] && GIT_SSH_CMD=\
-"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+if [ "$STRICT" -eq 0 ]; then
+  SSH_OPTS="$SSH_OPTS -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+  GIT_SSH_CMD="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+fi
+
 DEPTH=""; [ "$FULL_CLONE" -eq 0 ] && DEPTH="--depth 1"
 
 # ── Config ───────────────────────────────────────
@@ -119,9 +122,17 @@ if [ -f "$CFG_FILE" ]; then
       '['*']')
         _sec="${k#'['}"; _sec="${_sec%']'}"
         _suf="" _matched=0
+        # Handle [host:job] format
         case "$_sec" in
           default)           _suf="default" ;;
           "$HOST"|"$TARGET") _suf="default"; _matched=1 ;;
+          *:*)
+            _host="${_sec%:*}"
+            _job="${_sec#*:}"
+            case "$_host" in
+              "$HOST"|"$TARGET"|"$HOST:"*) _suf="$_job"; _matched=1 ;;
+            esac
+            ;;
         esac
         continue ;;
     esac
@@ -131,7 +142,7 @@ if [ -f "$CFG_FILE" ]; then
     v="${v#"${v%%[! ]*}"}"; v="${v%"${v##*[! ]}"}"
     v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
 
-    _sf="default" _base="$k"
+    _sf="${_suf:-default}" _base="$k"
     case "$k" in *_*)
       _stem="${k%_*}"
       case "$_stem" in repo|branch|dir|tree|run|user)
@@ -202,6 +213,9 @@ done
 remote_script() {
   printf 'set -e\n'
   printf 'export GIT_SSH_COMMAND=%s\n' "$(quote "$GIT_SSH_CMD")"
+  printf 'export GIT_CONFIG_COUNT=1\n'
+  printf 'export GIT_CONFIG_KEY_0=safe.directory\n'
+  printf "export GIT_CONFIG_VALUE_0='*'\n"
   cat <<'REMOTE'
 deploy() {
   _id="$1" _url="$2" _br="$3" _dir="$4"
@@ -306,7 +320,7 @@ else
   [ \"\$_n\" -eq 1 ] && echo \"  Backups: \$_bk\"
 fi
 echo '[$_id] Done'
-$_run_cmd
+ $_run_cmd
 " || { rm -rf "$_tmp"; return 1; }
 
   rm -rf "$_tmp"
@@ -343,8 +357,8 @@ for DEST_VAR in $BATCH_LIST; do
     for J in $BATCH_JOBS; do
       SCRIPT="$SCRIPT
 deploy $(quote "$J") $(quote "$(get "$J" REPO_URL)") \
-$(quote "$(get "$J" BRANCH)") $(quote "$(get "$J" DIR)") \
-$(quote "$(get "$J" TREE)") $(quote "$(get "$J" RUN)")"
+ $(quote "$(get "$J" BRANCH)") $(quote "$(get "$J" DIR)") \
+ $(quote "$(get "$J" TREE)") $(quote "$(get "$J" RUN)")"
     done
     info "Deploying to $DEST (git)"
     # shellcheck disable=SC2086

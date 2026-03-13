@@ -53,7 +53,7 @@ start() {
         if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null ; then
             echo "WARNING: Port $PORT is already in use."
         fi
-        docker run -d -p "$PORT":22 --name "$NAME" "$IMAGE"
+        docker run -d -p "$PORT":22 --name "$NAME" -v "/tmp:/host/tmp:ro" "$IMAGE"
         echo "Started $NAME on localhost:$PORT"
     fi
 }
