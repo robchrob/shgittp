@@ -226,8 +226,8 @@ has_t=0
 has_sh=0
 for arg in "$@"; do
     case "$arg" in
-        -t|-tt|-o*) has_t=1 ;;
-        sh)         has_sh=1 ;;
+        -t|-tt) has_t=1 ;;
+        sh)     has_sh=1 ;;
     esac
 done
 

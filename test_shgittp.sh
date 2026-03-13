@@ -676,10 +676,11 @@ test_same_user_multirepo_batching() {
     # Should have exactly ONE ssh invocation for the deploy (not counting git check)
     # Count occurrences of "myhost sh" (deploy script call)
     local count; count=$(printf '%s' "$log" | grep -c "myhost.* sh" || true)
-    [[ "$count" -eq 1 ]] && return 0
-    _failed=true
-    FAILURES+=("$_name: expected 1 SSH deploy call for myhost, got $count")
-    printf "    ${RED}expected 1 SSH deploy call, got %d${NC}\n" "$count" >&2
+    if [[ "$count" -ne 1 ]]; then
+        _failed=true
+        FAILURES+=("$_name: expected 1 SSH deploy call for myhost, got $count")
+        printf "    ${RED}expected 1 SSH deploy call, got %d${NC}\n" "$count" >&2
+    fi
     end
 }
 
@@ -689,7 +690,7 @@ test_git_mode_failure_propagates() {
     local fail_mock="$WORK_DIR/fail_mock"
     mkdir -p "$fail_mock/bin"
     cat > "$fail_mock/bin/ssh" << 'MOCK'
-#!/bin/sh
+#!/bin/bash
 printf '%s\n' "$*" >> "${MOCK_DIR}/ssh.log"
 case "$*" in
   *'command -v git'*)
@@ -850,7 +851,7 @@ test_summary_suppressed_on_failure() {
     local fail_mock="$WORK_DIR/fail_mock2"
     mkdir -p "$fail_mock/bin"
     cat > "$fail_mock/bin/ssh" << 'MOCK'
-#!/bin/sh
+#!/bin/bash
 printf '%s\n' "$*" >> "${MOCK_DIR}/ssh.log"
 case "$*" in
   *'command -v git'*)
