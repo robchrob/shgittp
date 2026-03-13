@@ -60,7 +60,7 @@ shgittp [options] [user@]host [-- ssh-opts]
 Config is read from `${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config`.
 Standard INI format. Sections match hostnames.
 
-**Precedence:** CLI flags → host section → `[default]` → built-in.
+**Precedence:** CLI flags → `[host:job]` subsection → `[default]` → built-in.
 
 ### Basics
 ```ini
@@ -78,25 +78,27 @@ run = ./setup.sh
 shgittp my-vps    # uses config above
 ```
 
-### Multi-repo (suffixes)
-Append `_suffix` to any key to define additional repos on the same host.
+### Multi-repo (job subsections)
+Use `[host:job]` subsections to define additional repos on the same host.
 Jobs deploy in parallel per connection.
 
 ```ini
-[workstation]
 # Main dotfiles → $HOME
+[workstation]
 repo = git@github.com:user/dotfiles.git
 dir = .cfg
 
 # Neovim config → ~/.config/nvim
-repo_nvim = git@github.com:user/nvim-config.git
-dir_nvim = .config/nvim/git
-tree_nvim = .config/nvim
+[workstation:nvim]
+repo = git@github.com:user/nvim-config.git
+dir = .config/nvim/git
+tree = .config/nvim
 
 # Scripts → ~/.local/bin
-repo_bin = git@github.com:user/scripts.git
-dir_bin = .local/share/bin-git
-tree_bin = .local/bin
+[workstation:scripts]
+repo = git@github.com:user/scripts.git
+dir = .local/share/bin-git
+tree = .local/bin
 ```
 
 ### Mixed users
