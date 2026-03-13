@@ -9,7 +9,8 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHGITTP="${SHGITTP:-$SCRIPT_DIR/shgittp}"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SHGITTP="${SHGITTP:-$PROJECT_ROOT/shgittp}"
 
 [[ -f "$SHGITTP" ]] || { printf 'Error: shgittp not found at %s\n' "$SHGITTP" >&2; exit 1; }
 chmod +x "$SHGITTP" 2>/dev/null || true

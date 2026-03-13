@@ -12,11 +12,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SHGITTP="${SHGITTP:-$SCRIPT_DIR/shgittp}"
-MANAGE="$SCRIPT_DIR/docker/manage.sh"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SHGITTP="${SHGITTP:-$PROJECT_ROOT/shgittp}"
+MANAGE="$PROJECT_ROOT/docker/manage.sh"
 
 [[ -f "$SHGITTP" ]] || { printf 'Error: shgittp not found at %s\n' "$SHGITTP" >&2; exit 1; }
-[[ -f "$MANAGE"  ]] || { printf 'Error: docker/manage.sh not found\n' >&2; exit 1; }
+[[ -f "$MANAGE"  ]] || { printf 'Error: docker/manage.sh not found\n' "$MANAGE" >&2; exit 1; }
 
 # ── Appearance & Counters ─────────────────────────────────────────────
 RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[1;33m'
