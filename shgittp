@@ -113,7 +113,7 @@ _add_job() {
 }
 
 if [ -f "$CFG_FILE" ]; then
-  _sec="" _suf="" _matched=0
+  _sec="" _suf="" _matched=0 _deprecated_run=0
   while IFS='=' read -r k v || [ -n "$k" ]; do
     case "$k" in ''|'#'*) continue ;; esac
     k="${k#"${k%%[! ]*}"}"; k="${k%"${k##*[! ]}"}"
@@ -145,7 +145,7 @@ if [ -f "$CFG_FILE" ]; then
     _sf="${_suf:-default}" _base="$k"
     case "$k" in *_*)
       _stem="${k%_*}"
-      case "$_stem" in repo|branch|dir|tree|run|user)
+      case "$_stem" in repo|branch|dir|tree|script|run|user)
         _base="$_stem"
         _sf="${k##*_}"
         _sf=$(printf '%s' "$_sf" | tr '[:upper:]' '[:lower:]')
@@ -154,15 +154,18 @@ if [ -f "$CFG_FILE" ]; then
     esac
 
     case "$_base" in
-      repo)   _key=REPO_URL ;; branch) _key=BRANCH ;;
-      dir)    _key=DIR ;;      tree)   _key=TREE ;;
-      run)    _key=RUN ;;      user)   _key=USER ;;
+      repo)   _key=REPO_URL ;;      branch) _key=BRANCH ;;
+      dir)    _key=DIR ;;           tree)   _key=TREE ;;
+      script) _key=SCRIPT ;;        user)   _key=USER ;;
+      run)    _key=LEGACY_SCRIPT; _deprecated_run=1 ;;
       *) continue ;;
     esac
 
     eval "CFG_${_sf}_${_key}=\$v"
     [ "$_matched" -eq 1 ] && _add_job "$_sf"
   done < "$CFG_FILE"
+  [ "$_deprecated_run" -eq 0 ] || \
+    warn "Config key 'run' is deprecated; use 'script'"
 fi
 
 # CLI overrides → default job
@@ -171,11 +174,18 @@ fi
 [ -n "$CLI_BRANCH" ] && CFG_default_BRANCH="$CLI_BRANCH"
 [ -n "$CLI_DIR" ]    && CFG_default_DIR="$CLI_DIR"
 [ -n "$CLI_TREE" ]   && CFG_default_TREE="$CLI_TREE"
-[ -n "$CLI_RUN" ]    && CFG_default_RUN="$CLI_RUN"
+[ -n "$CLI_RUN" ]    && CFG_default_SCRIPT="$CLI_RUN"
 
 get() {
-  eval "_v=\${CFG_${1}_${2}-}"
-  [ -n "$_v" ] || eval "_v=\${CFG_default_${2}-}"
+  if [ "$2" = "SCRIPT" ]; then
+    eval "_v=\${CFG_${1}_SCRIPT-}"
+    [ -n "$_v" ] || eval "_v=\${CFG_${1}_LEGACY_SCRIPT-}"
+    [ -n "$_v" ] || eval "_v=\${CFG_default_SCRIPT-}"
+    [ -n "$_v" ] || eval "_v=\${CFG_default_LEGACY_SCRIPT-}"
+  else
+    eval "_v=\${CFG_${1}_${2}-}"
+    [ -n "$_v" ] || eval "_v=\${CFG_default_${2}-}"
+  fi
   case "$2" in
     BRANCH) [ -n "$_v" ] || _v="main" ;;
     DIR)    [ -n "$_v" ] || _v=".dotfiles" ;;
@@ -219,7 +229,7 @@ remote_script() {
   cat <<'REMOTE'
 deploy() {
   _id="$1" _url="$2" _br="$3" _dir="$4"
-  _wt="${5:-$HOME}" _run="$6"
+  _wt="${5:-$HOME}" _script="$6"
   _gd="$HOME/$_dir"
   echo "[$_id] $_url ($_br) -> $_gd"
   mkdir -p "$_wt"
@@ -247,9 +257,9 @@ REMOTE
     git --git-dir="$_gd" --work-tree="$_wt" \
       checkout -fq "$_br"
   fi
-  [ -n "$_run" ] && {
-    echo "  Running: $_run"
-    (cd "$_wt" && eval "$_run")
+  [ -n "$_script" ] && {
+    echo "  Running: $_script"
+    (cd "$_wt" && eval "$_script")
   } || true
 }
 REMOTE
@@ -265,7 +275,7 @@ remote_has_git() {
 
 # ── Bootstrap deploy (no git on remote) ──────────
 deploy_nogit() {
-  _dest=$1 _id=$2 _url=$3 _br=$4 _dir=$5 _tree=$6 _run=$7
+  _dest=$1 _id=$2 _url=$3 _br=$4 _dir=$5 _tree=$6 _script=$7
   _rtree="${_tree:-\$HOME}"
   _tmp=$(mktemp -d)
 
@@ -285,10 +295,10 @@ deploy_nogit() {
     status.showUntrackedFiles no
   mv "$_tmp/bare.git" "$_tmp/$_dir"
 
-  _run_cmd=""
-  [ -n "$_run" ] && _run_cmd=$(printf \
+  _script_cmd=""
+  [ -n "$_script" ] && _script_cmd=$(printf \
     'echo "  Running: %s"\ncd "%s" && eval %s' \
-    "$_run" "$_rtree" "$(quote "$_run")")
+    "$_script" "$_rtree" "$(quote "$_script")")
 
   # shellcheck disable=SC2086
   (cd "$_tmp" && tar -cf - "$_dir" tree) | \
@@ -320,7 +330,7 @@ else
   [ \"\$_n\" -eq 1 ] && echo \"  Backups: \$_bk\"
 fi
 echo '[$_id] Done'
- $_run_cmd
+ $_script_cmd
 " || { rm -rf "$_tmp"; return 1; }
 
   rm -rf "$_tmp"
@@ -339,9 +349,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
     for J in $_dj; do
       _dr=$(get "$J" REPO_URL) _db=$(get "$J" BRANCH)
       _di=$(get "$J" DIR) _dw=$(get "$J" TREE)
-      _dx=$(get "$J" RUN)
+      _dx=$(get "$J" SCRIPT)
       log "  [$J] $_dr ($_db) -> ~/$_di${_dw:+ \
-tree=$_dw}${_dx:+ run=\"$_dx\"}"
+tree=$_dw}${_dx:+ script=\"$_dx\"}"
     done
   done
   exit 0
@@ -358,7 +368,7 @@ for DEST_VAR in $BATCH_LIST; do
       SCRIPT="$SCRIPT
 deploy $(quote "$J") $(quote "$(get "$J" REPO_URL)") \
  $(quote "$(get "$J" BRANCH)") $(quote "$(get "$J" DIR)") \
- $(quote "$(get "$J" TREE)") $(quote "$(get "$J" RUN)")"
+ $(quote "$(get "$J" TREE)") $(quote "$(get "$J" SCRIPT)")"
     done
     info "Deploying to $DEST (git)"
     # shellcheck disable=SC2086
@@ -371,7 +381,7 @@ deploy $(quote "$J") $(quote "$(get "$J" REPO_URL)") \
       deploy_nogit "$DEST" "$J" \
         "$(get "$J" REPO_URL)" "$(get "$J" BRANCH)" \
         "$(get "$J" DIR)" "$(get "$J" TREE)" \
-        "$(get "$J" RUN)" || RET=1
+        "$(get "$J" SCRIPT)" || RET=1
     done
   fi
 done

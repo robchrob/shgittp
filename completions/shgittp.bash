@@ -2,39 +2,59 @@
 # bash completion for shgittp
 
 _shgittp_completion() {
-  local cur prev words cword
+  local cur prev config_file hosts i
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  words=("${COMP_WORDS[@]}")
-  cword=$COMP_CWORD
 
   local opts="-r --repo -b --branch -d --dir -w --work -x --run -c --config -i -q --quiet --full-clone --strict --dry-run -v --version -h --help --"
 
+  for ((i = 1; i < COMP_CWORD; i++)); do
+    [[ "${COMP_WORDS[i]}" == "--" ]] && return 0
+  done
+
   case "$prev" in
-    -r|--repo|-b|--branch|-d|--dir|-w|--work|-x|--run|-c|--config)
-      # These flags expect arguments
+    -c|--config)
+      mapfile -t COMPREPLY < <(compgen -f -- "$cur")
+      return 0
+      ;;
+    -r|--repo|-b|--branch|-d|--dir|-w|--work|-x|--run)
       return 0
       ;;
   esac
 
   if [[ "$cur" == -* ]]; then
-    COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+    mapfile -t COMPREPLY < <(compgen -W "$opts" -- "$cur")
   else
-    # Try to complete hostnames from config or SSH known_hosts
-    local config_file="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
-    local hosts=""
+    config_file="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
+    hosts=$(
+      {
+        if [[ -f "$config_file" ]]; then
+          awk '
+            /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+              section = $0
+              sub(/^[[:space:]]*\[/, "", section)
+              sub(/\][[:space:]]*$/, "", section)
+              if (section == "default") next
+              sub(/:.*/, "", section)
+              print section
+            }
+          ' "$config_file"
+        fi
 
-    if [ -f "$config_file" ]; then
-      hosts=$(grep -E '^\[[a-zA-Z0-9@._-]+\]' "$config_file" | sed 's/\[//;s/\]//' | sort -u)
-    fi
+        if [[ -f "$HOME/.ssh/known_hosts" ]]; then
+          awk '
+            $1 !~ /^\|/ {
+              count = split($1, entries, ",")
+              for (i = 1; i <= count; i++) print entries[i]
+            }
+          ' "$HOME/.ssh/known_hosts"
+        fi
+      } | sort -u
+    )
 
-    if [ -f "$HOME/.ssh/known_hosts" ]; then
-      hosts="$hosts $(cut -d' ' -f1 "$HOME/.ssh/known_hosts" | grep -v '^\|' | sort -u)"
-    fi
-
-    COMPREPLY=( $(compgen -W "$hosts" -- "$cur") )
+    mapfile -t COMPREPLY < <(compgen -W "$hosts" -- "$cur")
   fi
 }
 
-complete -o bashdefault -o default -o nospace -F _shgittp_completion shgittp
+complete -o bashdefault -o default -F _shgittp_completion shgittp

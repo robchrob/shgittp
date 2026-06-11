@@ -1,4 +1,4 @@
-.TH SHGITTP 1 "2026" "shgittp v0.5.0" "User Commands"
+.TH SHGITTP 1 "June 2026" "shgittp v0.6.2" "User Commands"
 .SH NAME
 shgittp \- POSIX shell bootstrapper for bare-git dotfiles over SSH
 .SH SYNOPSIS
@@ -64,14 +64,30 @@ Print usage and exit.
 Configuration is read from
 .I $XDG_CONFIG_HOME/shgittp/config
 (typically ~/.config/shgittp/config). Format is standard INI.
-Sections match hostnames or user@host strings.
+Sections match hostnames or user@host strings. Named jobs use
+.RI [ host:job ]
+subsections.
 .PP
-Suffixed keys (e.g., repo_nvim, dir_nvim) define additional
-deployment jobs on the same host. Jobs sharing a connection
-string are deployed in parallel.
+Supported keys are
+.BR repo ,
+.BR branch ,
+.BR dir ,
+.BR tree ,
+.BR user ,
+and
+.BR script .
+The
+.B script
+key specifies a command to execute from the work tree after deployment.
+The old
+.B run
+key is accepted as a deprecated alias; script takes precedence if both
+are set.
+.PP
+Jobs sharing a connection string are deployed in parallel.
 .PP
 .B Precedence:
-CLI flags > host section > [default] section > built-in values.
+CLI flags > [host:job] subsection > [default] section > built-in values.
 .SH EXIT STATUS
 .TP
 .B 0

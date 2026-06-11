@@ -71,12 +71,17 @@ dir = .dotfiles
 [my-vps]
 repo = git@github.com:user/dotfiles.git
 user = admin
-run = ./setup.sh
+script = ./setup.sh
 ```
 
 ```sh
 shgittp my-vps    # uses config above
 ```
+
+The `script` key runs a command from the configured work tree after a
+successful deployment. The old `run` config key remains accepted as a
+deprecated alias; `script` takes precedence when both are present. The CLI
+spelling remains `-x, --run`.
 
 ### Multi-repo (job subsections)
 Use `[host:job]` subsections to define additional repos on the same host.
@@ -126,6 +131,29 @@ tree = /root
 
 Both modes detect file conflicts and move existing files to
 timestamped backups before checkout.
+
+## Shell Completion
+`make install` installs the Bash and Zsh completion files under the selected
+`PREFIX`. Start a new shell after installation, or enable the repository's
+Bash completion immediately:
+
+```sh
+source completions/shgittp.bash
+```
+
+For a standalone user-local Bash installation:
+
+```sh
+completion_dir="${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions}"
+mkdir -p "$completion_dir"
+curl -fsSL \
+  https://raw.githubusercontent.com/robchrob/shgittp/master/completions/shgittp.bash \
+  -o "$completion_dir/shgittp"
+source "$completion_dir/shgittp"
+```
+
+Automatic loading in future shells requires the distribution's
+`bash-completion` package to be installed and initialized.
 
 ## Dependencies
 | | Required |

@@ -256,12 +256,12 @@ test_git_backup_on_conflict() {
     end
 }
 
-test_git_run_command_executes() {
-    begin "git mode: run= command executes on remote"
+test_git_script_command_executes() {
+    begin "git mode: script= command executes on remote"
     wipe_remote_home $PORT_BASIC
 
-    local cfg="$WORK_DIR/cfg_git_run.ini"
-    printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\nrun = sh setup.sh\n' \
+    local cfg="$WORK_DIR/cfg_git_script.ini"
+    printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\nscript = sh setup.sh\n' \
         "$(container_repo_path "$REPO_URL")" > "$cfg"
 
     run_shgittp -c "$cfg" dev@localhost -- -p $PORT_BASIC
@@ -371,12 +371,12 @@ test_bootstrap_backup_on_conflict() {
     end
 }
 
-test_bootstrap_run_command_executes() {
-    begin "bootstrap mode: run= command executes on remote"
+test_bootstrap_script_command_executes() {
+    begin "bootstrap mode: script= command executes on remote"
     wipe_remote_home $PORT_NOGIT
 
-    local cfg="$WORK_DIR/cfg_boot_run.ini"
-    printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\nrun = sh setup.sh\n' \
+    local cfg="$WORK_DIR/cfg_boot_script.ini"
+    printf '[localhost]\nrepo = %s\nbranch = main\ndir = .dotfiles\nscript = sh setup.sh\n' \
         "$(host_repo_path "$REPO_URL")" > "$cfg"
 
     run_shgittp -c "$cfg" dev@localhost -- -p $PORT_NOGIT
@@ -549,14 +549,14 @@ main() {
     test_git_clean_deploy
     test_git_idempotent_redeploy
     test_git_backup_on_conflict
-    test_git_run_command_executes
+    test_git_script_command_executes
     test_git_custom_work_tree
     test_git_multi_repo_single_connection
 
     section "Bootstrap Mode  (alpine-nogit :$PORT_NOGIT)"
     test_bootstrap_clean_deploy
     test_bootstrap_backup_on_conflict
-    test_bootstrap_run_command_executes
+    test_bootstrap_script_command_executes
     test_bootstrap_custom_work_tree
     test_bootstrap_stderr_mode_flag
 

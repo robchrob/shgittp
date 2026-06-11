@@ -1,4 +1,10 @@
 # Changelog
+## v0.6.2
+- Rename the canonical post-deploy config key from `run` to `script`
+- Keep `run` as a deprecated config alias; `script` wins if both are set
+- Show `script=` in dry-run deployment plans
+- Install Bash and Zsh completions with `make install`
+- Fix Bash completion host discovery and normal spacing after completions
 
 ## v0.6.1
 - **BREAKING**: Replace suffix keys (`repo_nvim`, `dir_nvim`) with `[host:job]` subsections

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
-# test_shgittp.sh — shgittp regression suite (37 cases)
+# test_shgittp.sh — shgittp regression suite
 # ──────────────────────────────────────────────────────────────────────
 # Run:  chmod +x test_shgittp.sh && ./test_shgittp.sh
 #       SHGITTP=./shgittp ./test_shgittp.sh
@@ -220,6 +220,46 @@ test_cli_full_args() {
     end
 }
 
+# ── Bash Completion ──────────────────────────────────────────────────
+
+test_bash_completion() {
+    begin "Bash completion registers options and config hosts"
+    local completion="$PROJECT_ROOT/completions/shgittp.bash"
+    local home="$WORK_DIR/completion-home"
+    local output
+    mkdir -p "$home/.config/shgittp"
+    create_config "$home/.config/shgittp/config" \
+        '[default]' \
+        'branch = main' \
+        '' \
+        '[workstation]' \
+        'repo = git@example.com:user/dots.git' \
+        '' \
+        '[workstation:nvim]' \
+        'repo = git@example.com:user/nvim.git'
+
+    output=$(HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+        bash -c '
+            source "$1"
+            COMP_WORDS=(shgittp wo)
+            COMP_CWORD=1
+            _shgittp_completion
+            printf "host:%s\n" "${COMPREPLY[@]}"
+            COMP_WORDS=(shgittp --st)
+            COMP_CWORD=1
+            _shgittp_completion
+            printf "option:%s\n" "${COMPREPLY[@]}"
+            complete -p shgittp
+        ' _ "$completion")
+
+    assert_contains "$output" "host:workstation" "completion"
+    assert_not_contains "$output" "host:default" "completion"
+    assert_not_contains "$output" "host:workstation:nvim" "completion"
+    assert_contains "$output" "option:--strict" "completion"
+    assert_not_contains "$output" "nospace" "completion"
+    end
+}
+
 # ── Config Parsing ───────────────────────────────────────────────────
 
 test_config_default_fallback() {
@@ -407,6 +447,48 @@ test_config_fallback_chain() {
     end
 }
 
+test_config_script_key() {
+    begin "script config key sets the post-deploy command"
+    local cfg="$WORK_DIR/cfg_script.ini"
+    create_config "$cfg" \
+        '[myhost]' \
+        'repo = git@example.com:user/dots.git' \
+        'script = ./setup.sh'
+    run_shgittp --dry-run -c "$cfg" myhost
+    assert_exit 0
+    assert_contains "$_stderr" 'script="./setup.sh"' "stderr"
+    end
+}
+
+test_config_legacy_run_key() {
+    begin "deprecated run config key remains compatible"
+    local cfg="$WORK_DIR/cfg_legacy_run.ini"
+    create_config "$cfg" \
+        '[myhost]' \
+        'repo = git@example.com:user/dots.git' \
+        'run = ./legacy-setup.sh'
+    run_shgittp --dry-run -c "$cfg" myhost
+    assert_exit 0
+    assert_contains "$_stderr" "Config key 'run' is deprecated" "stderr"
+    assert_contains "$_stderr" 'script="./legacy-setup.sh"' "stderr"
+    end
+}
+
+test_config_script_precedes_run() {
+    begin "script config key takes precedence over deprecated run"
+    local cfg="$WORK_DIR/cfg_script_precedence.ini"
+    create_config "$cfg" \
+        '[myhost]' \
+        'repo = git@example.com:user/dots.git' \
+        'script = ./canonical.sh' \
+        'run = ./legacy.sh'
+    run_shgittp --dry-run -c "$cfg" myhost
+    assert_exit 0
+    assert_contains "$_stderr" 'script="./canonical.sh"' "stderr"
+    assert_not_contains "$_stderr" 'script="./legacy.sh"' "stderr"
+    end
+}
+
 test_cli_r_creates_job() {
     begin "-r creates job without config entries"
     local cfg="$WORK_DIR/cfg_empty.ini"; printf '' > "$cfg"
@@ -444,7 +526,7 @@ test_dry_run_plan() {
         'repo = git@example.com:user/dots.git' \
         'branch = main' \
         'dir = .cfg' \
-        'run = ./setup.sh'
+        'script = ./setup.sh'
     run_shgittp --dry-run -c "$cfg" myhost
     assert_exit 0
     assert_contains "$_stderr" "DRY RUN" "stderr"
@@ -585,14 +667,14 @@ test_git_mode_full_clone() {
     end
 }
 
-test_git_mode_run_command() {
-    begin "git mode: run command passed to remote deploy"
+test_git_mode_script_command() {
+    begin "git mode: script command passed to remote deploy"
     mock_git_on
     local cfg="$WORK_DIR/cfg_gm7.ini"
     create_config "$cfg" \
         '[mockhost]' \
         'repo = git@example.com:user/dots.git' \
-        'run = bash setup.sh'
+        'script = bash setup.sh'
     run_mocked "$MOCK_DIR" -c "$cfg" mockhost
     assert_exit 0
     local script; script=$(mock_stdin)
@@ -910,6 +992,9 @@ main() {
     test_cli_full_args
     test_default_config_path
 
+    section "Bash Completion"
+    test_bash_completion
+
     section "Config Parsing"
     test_config_default_fallback
     test_config_host_match
@@ -922,6 +1007,9 @@ main() {
     test_config_quoted_values
     test_config_uppercase_suffix
     test_config_fallback_chain
+    test_config_script_key
+    test_config_legacy_run_key
+    test_config_script_precedes_run
     test_cli_r_creates_job
 
     section "Dry Run"
@@ -937,7 +1025,7 @@ main() {
     test_git_mode_strict
     test_git_mode_shallow_default
     test_git_mode_full_clone
-    test_git_mode_run_command
+    test_git_mode_script_command
     test_git_mode_failure_propagates
 
     section "Deployment — Bootstrap"
