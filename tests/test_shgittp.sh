@@ -223,11 +223,13 @@ test_cli_full_args() {
 # ── Bash Completion ──────────────────────────────────────────────────
 
 test_bash_completion() {
-    begin "Bash completion registers options and config hosts"
-    local completion="$PROJECT_ROOT/completions/shgittp.bash"
+    begin "Bash completion loads from bashrc and completes options and hosts"
     local home="$WORK_DIR/completion-home"
+    local completion="$home/.local/share/bash-completion/completions/shgittp"
     local output
-    mkdir -p "$home/.config/shgittp"
+    mkdir -p "$home/.config/shgittp" "$(dirname "$completion")"
+    cp "$PROJECT_ROOT/completions/shgittp.bash" "$completion"
+    printf '. "%s"\n' "$completion" > "$home/.bashrc"
     create_config "$home/.config/shgittp/config" \
         '[default]' \
         'branch = main' \
@@ -239,8 +241,7 @@ test_bash_completion() {
         'repo = git@example.com:user/nvim.git'
 
     output=$(HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-        bash -c '
-            source "$1"
+        bash --noprofile --rcfile "$home/.bashrc" -i -c '
             COMP_WORDS=(shgittp wo)
             COMP_CWORD=1
             _shgittp_completion
@@ -250,13 +251,14 @@ test_bash_completion() {
             _shgittp_completion
             printf "option:%s\n" "${COMPREPLY[@]}"
             complete -p shgittp
-        ' _ "$completion")
+        ' 2>/dev/null)
 
     assert_contains "$output" "host:workstation" "completion"
     assert_not_contains "$output" "host:default" "completion"
     assert_not_contains "$output" "host:workstation:nvim" "completion"
     assert_contains "$output" "option:--strict" "completion"
     assert_not_contains "$output" "nospace" "completion"
+    assert_not_contains "$(<"$completion")" "mapfile" "completion"
     end
 }
 
@@ -752,7 +754,7 @@ test_same_user_multirepo_batching() {
         '' \
         'repo_nvim = git@example.com:user/nvim.git' \
         '' \
-        'repo_zsh = git@example.com:user/zsh.git'
+        'repo_scripts = git@example.com:user/scripts.git'
     run_mocked "$MOCK_DIR" -c "$cfg" myhost
     assert_exit 0
     local log; log=$(mock_log)

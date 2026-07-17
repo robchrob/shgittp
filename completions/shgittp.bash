@@ -1,8 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # bash completion for shgittp
 
 _shgittp_completion() {
-  local cur prev config_file hosts i
+  local cur prev config_file hosts candidate i
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
@@ -15,7 +15,9 @@ _shgittp_completion() {
 
   case "$prev" in
     -c|--config)
-      mapfile -t COMPREPLY < <(compgen -f -- "$cur")
+      while IFS= read -r candidate; do
+        COMPREPLY[${#COMPREPLY[@]}]="$candidate"
+      done < <(compgen -f -- "$cur")
       return 0
       ;;
     -r|--repo|-b|--branch|-d|--dir|-w|--work|-x|--run)
@@ -24,7 +26,9 @@ _shgittp_completion() {
   esac
 
   if [[ "$cur" == -* ]]; then
-    mapfile -t COMPREPLY < <(compgen -W "$opts" -- "$cur")
+    while IFS= read -r candidate; do
+      COMPREPLY[${#COMPREPLY[@]}]="$candidate"
+    done < <(compgen -W "$opts" -- "$cur")
   else
     config_file="${XDG_CONFIG_HOME:-$HOME/.config}/shgittp/config"
     hosts=$(
@@ -53,7 +57,9 @@ _shgittp_completion() {
       } | sort -u
     )
 
-    mapfile -t COMPREPLY < <(compgen -W "$hosts" -- "$cur")
+    while IFS= read -r candidate; do
+      COMPREPLY[${#COMPREPLY[@]}]="$candidate"
+    done < <(compgen -W "$hosts" -- "$cur")
   fi
 }
 

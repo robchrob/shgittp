@@ -3,8 +3,8 @@
 - Rename the canonical post-deploy config key from `run` to `script`
 - Keep `run` as a deprecated config alias; `script` wins if both are set
 - Show `script=` in dry-run deployment plans
-- Install Bash and Zsh completions with `make install`
-- Fix Bash completion host discovery and normal spacing after completions
+- Install Bash completion with `make install` and document explicit activation
+- Support Bash 3.2 and fix host discovery and normal completion spacing
 
 ## v0.6.1
 - **BREAKING**: Replace suffix keys (`repo_nvim`, `dir_nvim`) with `[host:job]` subsections
@@ -28,7 +28,7 @@
 - Deployment timing in summary output
 - Repo URL validation before execution
 - Man page (`man shgittp`)
-- Bash and Zsh completions
+- Bash completion
 - ShellCheck CI via GitHub Actions
 - Proper `make install` / `make uninstall` with PREFIX
 

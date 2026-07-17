@@ -133,27 +133,29 @@ Both modes detect file conflicts and move existing files to
 timestamped backups before checkout.
 
 ## Shell Completion
-`make install` installs the Bash and Zsh completion files under the selected
-`PREFIX`. Start a new shell after installation, or enable the repository's
-Bash completion immediately:
+`make install` installs the Bash completion file. Enable it in the current
+shell with:
 
 ```sh
-source completions/shgittp.bash
+. "$HOME/.local/share/bash-completion/completions/shgittp"
 ```
 
-For a standalone user-local Bash installation:
+Add the same line to `~/.bashrc` to enable completion in future Bash shells.
+This explicit source line works without installing the external
+`bash-completion` package. If you override `PREFIX` during installation, use
+the completion path printed by `make install`.
+
+When working directly from a repository checkout, use:
 
 ```sh
-completion_dir="${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/bash-completion/completions}"
-mkdir -p "$completion_dir"
-curl -fsSL \
-  https://raw.githubusercontent.com/robchrob/shgittp/master/completions/shgittp.bash \
-  -o "$completion_dir/shgittp"
-source "$completion_dir/shgittp"
+. completions/shgittp.bash
 ```
 
-Automatic loading in future shells requires the distribution's
-`bash-completion` package to be installed and initialized.
+Verify that Bash loaded it:
+
+```sh
+complete -p shgittp
+```
 
 ## Dependencies
 | | Required |

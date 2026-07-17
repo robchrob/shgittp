@@ -3,7 +3,6 @@ PREFIX    ?= $(HOME)/.local
 MANPREFIX ?= $(PREFIX)/share/man
 CONFDIR   ?= $(HOME)/.config/shgittp
 BASHCOMPDIR ?= $(PREFIX)/share/bash-completion/completions
-ZSHCOMPDIR  ?= $(PREFIX)/share/zsh/site-functions
 
 .PHONY: install uninstall reinstall lint help
 
@@ -21,10 +20,6 @@ install:
 	@cp -f completions/shgittp.bash $(DESTDIR)$(BASHCOMPDIR)/shgittp
 	@chmod 644 $(DESTDIR)$(BASHCOMPDIR)/shgittp
 	@echo "  $(DESTDIR)$(BASHCOMPDIR)/shgittp"
-	@mkdir -p $(DESTDIR)$(ZSHCOMPDIR)
-	@cp -f completions/_shgittp $(DESTDIR)$(ZSHCOMPDIR)/_shgittp
-	@chmod 644 $(DESTDIR)$(ZSHCOMPDIR)/_shgittp
-	@echo "  $(DESTDIR)$(ZSHCOMPDIR)/_shgittp"
 	@mkdir -p $(CONFDIR)
 	@if [ ! -f $(CONFDIR)/config ]; then \
 		cp shgittp.conf $(CONFDIR)/config; \
@@ -33,13 +28,15 @@ install:
 		echo "  $(CONFDIR)/config (exists, skipped)"; \
 	fi
 	@echo "Done."
+	@echo "Enable Bash completion now:"
+	@echo "  . $(DESTDIR)$(BASHCOMPDIR)/shgittp"
+	@echo "Add the same line to ~/.bashrc to enable it in future shells."
 
 uninstall:
 	@rm -f $(DESTDIR)$(PREFIX)/bin/shgittp
 	@rm -f $(DESTDIR)$(MANPREFIX)/man1/shgittp.1
 	@rm -f $(DESTDIR)$(BASHCOMPDIR)/shgittp
-	@rm -f $(DESTDIR)$(ZSHCOMPDIR)/_shgittp
-	@echo "Removed shgittp, man page, and completions. Config left at $(CONFDIR)/"
+	@echo "Removed shgittp, man page, and Bash completion. Config left at $(CONFDIR)/"
 
 reinstall: uninstall install
 
@@ -49,8 +46,8 @@ lint:
 	@echo "shellcheck: ok"
 
 help:
-	@echo "make install    Install binary, man page, config, and completions"
-	@echo "make uninstall  Remove binary, man page, and completions"
+	@echo "make install    Install binary, man page, config, and Bash completion"
+	@echo "make uninstall  Remove binary, man page, and Bash completion"
 	@echo "make lint       Run shellcheck"
 	@echo ""
 	@echo "Override: make PREFIX=/usr/local install"
